@@ -19,10 +19,10 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   fi
 
   if [[ "${remote_sha}" == "0000000000000000000000000000000000000000" ]]; then
-    # New remote ref: check if blocked files exist in the commit tree
+    # New remote ref: block if any commit reachable from local_sha touches the file
     for path in "${blocked_paths[@]}"; do
-      if git ls-tree -r --name-only "${local_sha}" | grep -Fxq "${path}"; then
-        echo "ERROR: Push blocked: '${path}' is present in ${local_ref}." >&2
+      if git rev-list -n 1 "${local_sha}" -- "${path}" >/dev/null 2>&1; then
+        echo "ERROR: Push blocked: '${path}' exists in the branch history for ${local_ref}." >&2
         block=true
       fi
     done
@@ -52,4 +52,3 @@ EOF
 fi
 
 exit 0
-
