@@ -1,4 +1,4 @@
-# Google Classroom Search (DOM-First, API Fallback)
+# Classroom-Finder (DOM-First, API Fallback)
 
 Google Classroom（Web）に**高速・高精度の横断検索**を付与する Chrome 拡張機能。まずは **DOM 抽出（端末内完結・審査不要・高速）**で動作し、DOM が崩れた/重い場合は**Classroom API へ安全に切替**できる。
 
