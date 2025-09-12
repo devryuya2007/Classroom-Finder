@@ -1,8 +1,6 @@
 // Bootstrap constants and style injector (recreated)
-const MENU_SELECTOR = 'div.tCcYY.yWU57c[role="menu"]';
 const TOPBAR_SELECTOR = 'nav.joJglb[role="navigation"]';
 const STYLE_ID = "gcx-sarch-style";
-const WRAP_CLASS = "gcx-sarch-wrap";
 const TOPBAR_WRAP = "gcx-topbar";
 const TOPBAR_INPUT = "gcx-topbar-input";
 
@@ -11,25 +9,6 @@ function ensureStyles() {
   const style = document.createElement("style");
   style.id = STYLE_ID;
   style.textContent = `
-    /* Left menu search (sibling wrapper) */
-    .${WRAP_CLASS} { display: block; }
-    .${WRAP_CLASS} > input.gcx-sarch {
-      box-sizing: border-box;
-      display: block;
-      width: 100%;
-      border: 1px solid #dadce0;
-      border-radius: 8px;
-      background: #fff;
-      color: inherit;
-      outline: none;
-      transition: border-color .15s ease, box-shadow .15s ease;
-    }
-    .${WRAP_CLASS} > input.gcx-sarch::placeholder { color: #5f6368; }
-    .${WRAP_CLASS} > input.gcx-sarch:focus {
-      border-color: #1a73e8;
-      box-shadow: 0 0 0 3px rgba(26,115,232,0.15);
-    }
-
     /* Top bar quick search */
     .${TOPBAR_WRAP} {
       position: relative;
@@ -201,60 +180,7 @@ async function maybeLoadCDNs() {
 }
 
 
-function createSarchInput() {
-  const input = document.createElement("input");
-  input.type = "search";
-  // Use our own class to avoid interfering with menu logic
-  input.className = "sarch gcx-sarch";
-  input.placeholder = "検索…";
-  input.setAttribute("role", "searchbox");
-  input.setAttribute("aria-label", "検索");
-  input.autocapitalize = "off";
-  input.autocomplete = "off";
-  input.spellcheck = false;
-  // Stop propagation so menu-level delegated handlers don't react to typing/clicks
-  const stop = (e) => e.stopPropagation();
-  [
-    "click",
-    "mousedown",
-    "mouseup",
-    "pointerdown",
-    "pointerup",
-    "touchstart",
-    "touchend",
-    "touchmove",
-    "keydown",
-    "keypress",
-    "keyup",
-  ].forEach((t) => input.addEventListener(t, stop, { passive: true }));
-  return input;
-}
-
-let seq = 0;
-function ensureMenuId(menuEl) {
-  if (!menuEl.id) menuEl.id = `gcx-menu-${++seq}`;
-  return menuEl.id;
-}
-
-function createWrapper(menuEl) {
-  const wrap = document.createElement("div");
-  wrap.className = WRAP_CLASS;
-  wrap.setAttribute("role", "search");
-  wrap.setAttribute("aria-label", "メニュー検索");
-  wrap.dataset.gcxFor = ensureMenuId(menuEl);
-  const stop = (e) => e.stopPropagation();
-  [
-    "click",
-    "mousedown",
-    "mouseup",
-    "pointerdown",
-    "pointerup",
-    "touchstart",
-    "touchend",
-    "touchmove",
-  ].forEach((t) => wrap.addEventListener(t, stop, { passive: true }));
-  return wrap;
-}
+// (menu-side search injection removed; fixed to topbar only)
 
 // ===== Top bar UI (nav.joJglb) =====
 function hasTopbar(navEl) {
@@ -295,69 +221,9 @@ function createTopbar(navEl) {
   return wrap;
 }
 
-function unifyStyleFromMenuItem(input, menuEl, wrap) {
-  try {
-    const ref =
-      menuEl.querySelector(':scope > a.uTwgne.TbJ0Pc[role="menuitem"]') ||
-      menuEl.querySelector('a.uTwgne.TbJ0Pc[role="menuitem"]');
-    if (!ref) return;
-    const cs = getComputedStyle(ref);
-    // Copy key visual properties for consistency
-    if (wrap) {
-      wrap.style.marginTop = cs.marginTop;
-      wrap.style.marginBottom = cs.marginBottom;
-      wrap.style.marginLeft = cs.marginLeft;
-      wrap.style.marginRight = cs.marginRight;
-    } else {
-      input.style.marginTop = cs.marginTop;
-      input.style.marginBottom = cs.marginBottom;
-      input.style.marginLeft = cs.marginLeft;
-      input.style.marginRight = cs.marginRight;
-    }
-    input.style.paddingTop = cs.paddingTop;
-    input.style.paddingBottom = cs.paddingBottom;
-    input.style.paddingLeft = cs.paddingLeft;
-    input.style.paddingRight = cs.paddingRight;
-    input.style.borderRadius = cs.borderRadius || input.style.borderRadius;
-    input.style.font = cs.font;
-    input.style.fontFamily = cs.fontFamily;
-    input.style.fontSize = cs.fontSize;
-    input.style.fontWeight = cs.fontWeight;
-    input.style.lineHeight = cs.lineHeight;
-    input.style.letterSpacing = cs.letterSpacing;
-    input.style.color = cs.color;
-    // Adjust width to account for horizontal margins
-    const ml = parseFloat(cs.marginLeft || "0");
-    const mr = parseFloat(cs.marginRight || "0");
-    if (!Number.isNaN(ml) && !Number.isNaN(mr)) {
-      input.style.width = `calc(100% - ${ml + mr}px)`;
-    }
-  } catch {}
-}
+// unifyStyleFromMenuItem removed (topbar-only now)
 
-function hasSarch(menuEl) {
-  // consider wrapper sibling bound to this menu
-  const id = ensureMenuId(menuEl);
-  const parent = menuEl.parentElement;
-  if (!parent) return false;
-  const prev = menuEl.previousElementSibling;
-  if (prev && prev.classList.contains(WRAP_CLASS) && prev.dataset.gcxFor === id)
-    return true;
-  return !!parent.querySelector(
-    `.${WRAP_CLASS}[data-gcx-for="${CSS.escape(id)}"]`
-  );
-}
-
-function injectInto(menuEl) {
-  if (!menuEl || hasSarch(menuEl)) return;
-  const wrap = createWrapper(menuEl);
-  const input = createSarchInput();
-  unifyStyleFromMenuItem(input, menuEl, wrap);
-  wrap.appendChild(input);
-  const parent = menuEl.parentElement;
-  if (!parent) return;
-  parent.insertBefore(wrap, menuEl);
-}
+// menu-side helpers removed
 
 function placeTopbar(navEl, bar) {
   const cs = getComputedStyle(navEl);
@@ -418,61 +284,25 @@ function injectTopbar(root = document) {
   return added > 0;
 }
 
-function removeMenuSearches() {
-  document.querySelectorAll(`.${WRAP_CLASS}`).forEach((n) => n.remove());
-}
-
 function scanAndInject(root = document) {
-  const topbarAdded =
-    injectTopbar(root) || !!document.querySelector(`.${TOPBAR_WRAP}`);
-  if (topbarAdded) {
-    // Prefer topbar: remove menu-side search to avoid duplication
-    removeMenuSearches();
-  } else {
-    root.querySelectorAll(MENU_SELECTOR).forEach(injectInto);
-  }
+  injectTopbar(root);
 }
 
 function observe() {
-  const pending = new Set();
-  let scheduled = false;
-  const schedule = (el) => {
-    if (!el || !(el instanceof Element)) return;
-    const container = el.matches(MENU_SELECTOR)
-      ? el
-      : el.closest
-      ? el.closest(MENU_SELECTOR)
-      : null;
-    if (!container) return;
-    pending.add(container);
-    if (scheduled) return;
-    scheduled = true;
-    requestAnimationFrame(() => {
-      pending.forEach((c) => scanAndInject(c));
-      pending.clear();
-      scheduled = false;
-    });
-  };
-
   const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
-      if (m.type !== "childList") continue;
-      if (m.target instanceof Element) schedule(m.target);
-      m.addedNodes.forEach((node) => {
-        if (!(node instanceof Element)) return;
-        schedule(node);
-      });
+      if (m.type === 'childList') {
+        injectTopbar();
+        break;
+      }
     }
-    // ensure topbar exists even if nav is re-rendered
-    injectTopbar();
   });
   observer.observe(document.documentElement || document, {
     childList: true,
     subtree: true,
   });
-
   // Fallback: periodic check in case some mutations are missed
-  setInterval(() => scanAndInject(), 2000);
+  setInterval(() => injectTopbar(), 2000);
 }
 
 function init() {
