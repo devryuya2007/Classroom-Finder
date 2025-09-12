@@ -1,0 +1,4 @@
+# Keep the samples folder in the repo but do not track its contents
+/samples/*
+!/samples/.gitkeep
+

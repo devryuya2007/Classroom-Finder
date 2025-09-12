@@ -1,0 +1,16 @@
+{
+  "name": "Classroom-Finder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Google Classroom に高速横断検索を追加（MV3, ローカルDB, JS）",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "echo 'Load extension via chrome://extensions (unpacked)'",
+    "build": "echo 'No build step required. Optionally add Vite/Rollup.'",
+    "test": "echo 'No tests defined' && exit 0",
+    "lint": "echo 'ESLint not configured yet' && exit 0"
+  }
+}

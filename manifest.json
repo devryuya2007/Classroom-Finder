@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Classroom-Finder",
+  "version": "1.0.0",
+  "description": "Google Classroom に高速横断検索を追加",
+  "permissions": ["storage", "scripting"],
+  "host_permissions": ["https://classroom.google.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://classroom.google.com/*"],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
