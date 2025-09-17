@@ -133,7 +133,8 @@ const CDN = {
   // ライブラリ名 => { marker, scripts }（開発用）※ライセンスはいずれも MIT（執筆時点）
   fuse: {
     marker: "Fuse", // 名札（<script data-gcx-lib="Fuse">）重複注入の識別に使用
-    scripts: [ // フォールバック候補の CDN URL 群（順に試す）
+    scripts: [
+      // フォールバック候補の CDN URL 群（順に試す）
       "https://cdn.jsdelivr.net/npm/fuse.js@6.6.2/dist/fuse.min.js",
       "https://cdnjs.cloudflare.com/ajax/libs/fuse.js/6.6.2/fuse.min.js",
       "https://unpkg.com/fuse.js@6.6.2/dist/fuse.min.js",
@@ -291,14 +292,14 @@ function placeTopbar(navEl, bar) {
   if (cs.position === "static") navEl.style.position = "relative";
 
   requestAnimationFrame(() => {
-    const barRect = bar.getBoundingClientRect();
+    const barRect = bar.getBoundingClientRect(); // 検索バーの大きさを取得　他の要素と重なるのか
     let overlapped = false;
     if (!isFlex) {
       overlapped = true;
     } else {
       const others = Array.from(
         navEl.querySelectorAll('a,button,[role="button"],input')
-      ).filter((el) => el !== bar && !bar.contains(el));
+      ).filter((el) => el !== bar && !bar.contains(el)); // 自分自身と子孫は除外
       for (const el of others) {
         const r = el.getBoundingClientRect();
         // 矩形の交差量で重なりを判定（x/y いずれも交差 > 0）
@@ -324,26 +325,28 @@ function placeTopbar(navEl, bar) {
   });
 }
 
+//rootが指定されないならdefaultでdocument
 function injectTopbar(root = document) {
   let added = 0; // 追加件数
   root.querySelectorAll(TOPBAR_SELECTOR).forEach((navEl) => {
     if (hasTopbar(navEl)) return;
-    const bar = createTopbar(navEl);
-    placeTopbar(navEl, bar);
+    const bar = createTopbar(navEl); // div > input を生成
+    placeTopbar(navEl, bar); // アンカーリンクがあるならその直後に挿入する関数ないなら末尾に追加
     added++;
   });
-  return added > 0;
+  return added > 0; // 一個でも追加できたら終了
 }
 
 function scanAndInject(root = document) {
-  // 現在の DOM に対してトップバー検索を注入
-  injectTopbar(root);
+  injectTopbar(root); //将来的に拡張したり他のUIを追加する場合に備えて引数rootを受け取るようにしておく
 }
 
 function observe() {
   // DOM 変化を監視し、必要に応じて再注入（軽量）
   const observer = new MutationObserver((mutations) => {
     for (const m of mutations) {
+      // Classroomは子要素の変化が大きいSPAなのでchildListだけで十分
+      //もし他の変化も監視するならattributesやcharacterDataも追加する
       if (m.type === "childList") {
         injectTopbar();
         break;
