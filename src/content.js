@@ -3,14 +3,11 @@
 // - スタイルは外部 CSS を <link> で一度だけ注入（UI 本体は後段で生成）
 // - 検索アイコンは before/after の疑似要素で CSS 描画（画像やアイコンフォント不要）
 // ここから定数定義とスタイル注入ヘルパー
-const TOPBAR_SELECTOR = 'nav.joJglb[role="navigation"]'; // 検索 UI を置くナビのセレクタ
 const STYLE_ID = "gcx-sarch-style"; // 注入する <link> の id（重複防止）
 const STYLE_PATH = "src/gcx-topbar.css"; // 読み込むスタイルシートのパス
 const TOPBAR_WRAP = "gcx-topbar"; // 検索 UI ラッパーのクラス
 const TOPBAR_INPUT = "gcx-topbar-input"; // 検索入力のクラス
-const NAV_RELATIVE_CLASS = "gcx-topbar-host-relative"; // ラッパー配置用クラス
-const NAV_LAYOUT_CLASS = "gcx-topbar-host-flex"; // ナビゲーション全体をフレックスにする補助クラス
-const HEADER_HOST_SELECTOR = ".aqdrmf-rymPhb.O68mGe-hqgu2c"; // Classroom トップバーのラッパー
+const TOPBAR_ID = "gcx-topbar-overlay"; // DOM 上の ID（重複防止）
 
 // 注意: ensureStyles は CSS を注入するだけ。検索 UI 本体は createTopbar()/injectTopbar() で生成・挿入。
 function ensureStyles() {
@@ -98,7 +95,7 @@ function alreadyInjected(marker) {
 //  1) 定義がない場合は false
 //  2) 既に注入済みなら true
 //  3) 候補 URL を順に直列で試す（最初に成功した時点で終了）
-//  4) 結果を CustomEvent "gcx:libs-loaded"（互換: "gcx:cdn-loaded"）で通知
+//  4) 結果を CustomEvent "gcx:libs-loaded" で通知
 async function injectLib(name) {
   const spec = LIB_SPECS[name];
   if (!spec) return false;
@@ -128,7 +125,6 @@ async function injectLib(name) {
     source: LIB_SPECS[name]?.sources.at(-1) || "",
   };
   window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
-  window.dispatchEvent(new CustomEvent("gcx:cdn-loaded", { detail }));
   return false;
 }
 
@@ -145,30 +141,15 @@ async function loadLocalLibs() {
 
 // メニュー側への注入は削除し、トップバー専用に単純化
 
-// ===== トップバー UI (nav.joJglb) =====
-function hasTopbar(navEl) {
-  // 同じ nav 内または親ラッパー内に既に UI があれば重複挿入しない
-  if (navEl.querySelector(`:scope > .${TOPBAR_WRAP}`)) return true;
-  const host = navEl.closest(HEADER_HOST_SELECTOR);
-  return !!host?.querySelector(`:scope > .${TOPBAR_WRAP}`);
-}
-
-function isTopHeaderNav(navEl) {
-  if (!navEl) return false;
-  if (!navEl.matches(TOPBAR_SELECTOR)) return false;
-  // Classroom のトップバーは header (role=banner) 内に配置され、ブランドリンク onkcGd を持つ
-  if (!navEl.closest('header, [role="banner"]')) return false;
-  return !!navEl.querySelector("a.onkcGd");
-}
-
-function createTopbar(navEl) {
+// ===== トップバー UI（固定オーバーレイ） =====
+function createTopbar() {
   // 検索コンテナを生成（ロールとラベルは ARIA を付与）
-  const wrap = document.createElement("div"); // ラッパー
+  const wrap = document.createElement("div");
   wrap.classList.add(TOPBAR_WRAP);
   wrap.setAttribute("role", "search");
   wrap.setAttribute("aria-label", "クイック検索");
 
-  const input = document.createElement("input"); // 入力ボックス
+  const input = document.createElement("input");
   input.type = "search";
   input.classList.add(TOPBAR_INPUT);
   input.placeholder = "クラス全体を検索…";
@@ -177,7 +158,6 @@ function createTopbar(navEl) {
   input.autocomplete = "off";
   input.spellcheck = false;
 
-  // 入力操作が親のナビに伝播してショートカット等を誤発火しないように抑止
   const stop = (e) => e.stopPropagation();
   [
     "click",
@@ -197,121 +177,40 @@ function createTopbar(navEl) {
   return wrap;
 }
 
-// unifyStyleFromMenuItem は不要になったため削除（トップバー専用）
-
-// メニュー側ヘルパー群は削除済み
-
-function placeTopbar(navEl, bar) {
-  const host = navEl.closest(HEADER_HOST_SELECTOR) || navEl;
-  const firstChild = host.firstElementChild;
-
-  if (host.querySelector(`:scope > .${TOPBAR_WRAP}`)) {
-    return false;
-  }
-
-  host.classList.add(NAV_LAYOUT_CLASS);
-  if (host !== navEl) {
-    navEl.classList.add(NAV_LAYOUT_CLASS);
-  }
-
-  if (firstChild) {
-    host.insertBefore(bar, firstChild);
-  } else {
-    host.appendChild(bar);
-  }
-
-  const cs = getComputedStyle(host);
-  // ナビが flex でない、または他要素と重なる場合はオーバーレイに切替
-  const isFlex = cs.display.includes("flex");
-  if (cs.position === "static") {
-    host.classList.add(NAV_RELATIVE_CLASS);
-  } else {
-    host.classList.remove(NAV_RELATIVE_CLASS);
-  }
-
-  requestAnimationFrame(() => {
-    const barRect = bar.getBoundingClientRect(); // 検索バーの大きさを取得　他の要素と重なるのか
-    let overlapped = false;
-    if (!isFlex) {
-      overlapped = true;
-    } else {
-      const others = Array.from(
-        host.querySelectorAll('a,button,[role="button"],input')
-      ).filter((el) => el !== bar && !bar.contains(el)); // 自分自身と子孫は除外
-      for (const el of others) {
-        const r = el.getBoundingClientRect();
-        // 矩形の交差量で重なりを判定（x/y いずれも交差 > 0）
-        const xOverlap = Math.max(
-          0,
-          Math.min(barRect.right, r.right) - Math.max(barRect.left, r.left)
-        );
-        const yOverlap = Math.max(
-          0,
-          Math.min(barRect.bottom, r.bottom) - Math.max(barRect.top, r.top)
-        );
-        if (xOverlap > 0 && yOverlap > 0) {
-          overlapped = true;
-          break;
-        }
-      }
-    }
-    if (overlapped) {
-      bar.setAttribute("data-overlay", "1");
-    } else {
-      bar.removeAttribute("data-overlay");
-    }
-  });
-
-  return true;
-}
-
-//rootが指定されないならdefaultでdocument
-function injectTopbar(root = document) {
-  let added = 0; // 追加件数
-  root.querySelectorAll(TOPBAR_SELECTOR).forEach((navEl) => {
-    if (hasTopbar(navEl)) return;
-    if (!isTopHeaderNav(navEl)) return;
-    const bar = createTopbar(navEl); // div > input を生成
-    if (!placeTopbar(navEl, bar)) return;
-    added++;
-  });
-  return added > 0; // 一個でも追加できたら終了
-}
-
-function scanAndInject(root = document) {
+function ensureTopbar() {
   ensureStyles();
-  injectTopbar(root); //将来的に拡張したり他のUIを追加する場合に備えて引数rootを受け取るようにしておく
+  if (!document.body) return null;
+
+  let topbar = document.getElementById(TOPBAR_ID);
+  if (!topbar) {
+    topbar = createTopbar();
+    topbar.id = TOPBAR_ID;
+    document.body.appendChild(topbar);
+  }
+  return topbar;
 }
 
 function observe() {
   // DOM 変化を監視し、必要に応じて再注入（軽量）
   const observer = new MutationObserver((mutations) => {
-    for (const m of mutations) {
-      // Classroomは子要素の変化が大きいSPAなのでchildListだけで十分
-      //もし他の変化も監視するならattributesやcharacterDataも追加する
-      if (m.type === "childList") {
-        ensureStyles();
-        injectTopbar();
-        break;
-      }
+    if (mutations.some((m) => m.type === "childList")) {
+      ensureTopbar();
     }
   });
-  observer.observe(document.documentElement || document, {
-    childList: true,
-    subtree: true,
-  });
+  const target = document.body || document.documentElement;
+  if (target) {
+    observer.observe(target, {
+      childList: true,
+    });
+  }
   // 監視で取りこぼした場合のフォールバックとして定期チェック
-  setInterval(() => {
-    ensureStyles();
-    injectTopbar();
-  }, 2000);
+  setInterval(() => ensureTopbar(), 2000);
 }
 
 function init() {
   // 初期化フロー: スタイル注入 → ライブラリ読み込み → UI 注入 → DOM 監視
-  ensureStyles();
+  ensureTopbar();
   loadLocalLibs();
-  scanAndInject();
   observe();
   console.debug("[GCX] search input injection initialized");
 }

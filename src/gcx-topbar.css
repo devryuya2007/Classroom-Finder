@@ -1,24 +1,30 @@
 /* Quick search topbar styles injected via content script */
-/* nav.joJglb[role="navigation"]ロゴやメニューアイコン、ユーザーアイコンの子要素として挿入される*/
 .gcx-topbar {
-  position: relative;
-  display: inline-flex;
+  position: fixed;
+  top: 9px;
+  left: 69%;
+  transform: translateX(-50%);
+  display: flex;
   align-items: center;
   gap: 8px;
-  max-width: 420px;
-  min-width: 220px;
-  margin-left: auto;
-  padding: 0 6px;
+  width: clamp(240px, 38vw, 420px);
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #f8fafd;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  z-index: 2000;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .gcx-topbar > input.gcx-topbar-input {
   box-sizing: border-box;
   width: 100%;
-  height: 36px;
-  padding: 0 12px 0 32px;
-  border: 1px solid rgba(95, 99, 104, 0.3);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.8);
+  height: 38px;
+  padding: 0 14px 0 36px;
+  border: 1px solid rgba(95, 99, 104, 0.28);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.9);
   color: inherit;
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease,
@@ -31,18 +37,20 @@
 
 .gcx-topbar > input.gcx-topbar-input:focus {
   border-color: #1a73e8;
-  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.15);
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18);
   background: #fff;
 }
 
 .gcx-topbar::before {
   content: "";
   position: absolute;
-  left: 12px;
+  left: 18px;
+  top: 50%;
   width: 14px;
   height: 14px;
   border: 2px solid currentColor;
   border-radius: 50%;
+  transform: translateY(-50%);
   opacity: 0.55;
   pointer-events: none;
 }
@@ -50,32 +58,19 @@
 .gcx-topbar::after {
   content: "";
   position: absolute;
-  left: 24px;
-  top: 18px;
+  left: 29px;
+  top: 50%;
   width: 8px;
   height: 2px;
   background: currentColor;
-  transform: rotate(45deg);
+  transform: translateY(-50%) rotate(45deg);
   opacity: 0.55;
   pointer-events: none;
 }
 
-.gcx-topbar[data-overlay="1"] {
-  position: absolute !important;
-  left: 69%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  margin-left: 0 !important;
-  max-width: min(560px, 70vw);
-  width: clamp(220px, 40vw, 420px);
-  z-index: 10;
-}
-
-.gcx-topbar-host-relative {
-  position: relative;
-}
-
-.gcx-topbar-host-flex {
-  display: flex;
-  align-items: center;
+@media (max-width: 600px) {
+  .gcx-topbar {
+    top: 12px;
+    width: calc(100vw - 32px);
+  }
 }
