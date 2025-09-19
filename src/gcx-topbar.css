@@ -11,61 +11,70 @@
   padding: 6px 10px;
   border-radius: 999px;
   background: #f8fafd;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18);
+  /* box-shadow: 0 12px 24px rgba(0, 0, 0, 0.18); */
   z-index: 2000;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
 
-.gcx-topbar > input.gcx-topbar-input {
-  box-sizing: border-box;
-  width: 100%;
+.gcx-topbar > .svg-input-wrap {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
   height: 38px;
-  padding: 0 14px 0 36px;
+  padding: 0 14px;
   border: 1px solid rgba(95, 99, 104, 0.28);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.9);
-  color: inherit;
-  outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease,
     background 0.15s ease;
 }
 
-.gcx-topbar > input.gcx-topbar-input::placeholder {
+.gcx-topbar .gcx-topbar-input {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  outline: none;
+}
+
+.gcx-topbar .gcx-topbar-input::placeholder {
   color: #5f6368;
 }
 
-.gcx-topbar > input.gcx-topbar-input:focus {
+.gcx-topbar > .svg-input-wrap:focus-within {
   border-color: #1a73e8;
   box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.18);
   background: #fff;
 }
 
-.gcx-topbar::before {
-  content: "";
-  position: absolute;
-  left: 18px;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-  transform: translateY(-50%);
-  opacity: 0.55;
+.gcx-topbar > .svg-input-wrap > .icon-svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: #000;
   pointer-events: none;
 }
 
-.gcx-topbar::after {
-  content: "";
-  position: absolute;
-  left: 29px;
-  top: 50%;
-  width: 8px;
-  height: 2px;
-  background: currentColor;
-  transform: translateY(-50%) rotate(45deg);
-  opacity: 0.55;
-  pointer-events: none;
+.gcx-topbar > .svg-input-wrap > .icon-svg path {
+  fill: currentColor;
+}
+
+.gcx-topbar .gcx-suggestions {
+  margin-top: 10px;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(95, 99, 104, 0.08);
+  color: #202124;
+  opacity: 1;
+  transition: opacity 0.2s ease;
 }
 
 @media (max-width: 600px) {

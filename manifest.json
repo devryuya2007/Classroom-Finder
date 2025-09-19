@@ -16,6 +16,7 @@
     {
       "resources": [
         "src/gcx-topbar.css",
+        "src/libs/icon.svg/検索用の虫眼鏡アイコン素材.svg",
         "src/libs/fuse.min.js",
         "src/libs/idb.min.js",
         "src/libs/hotkeys.min.js"

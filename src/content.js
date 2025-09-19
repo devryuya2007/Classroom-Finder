@@ -1,13 +1,19 @@
 // Google Classroom のトップバーへ「クイック検索」UIを挿入するスクリプト
 // - ネットワーク通信は行わず、DOM 監視で UI を差し込むだけ
 // - スタイルは外部 CSS を <link> で一度だけ注入（UI 本体は後段で生成）
-// - 検索アイコンは before/after の疑似要素で CSS 描画（画像やアイコンフォント不要）
+// - 検索アイコンはインライン SVG 要素で描画（CSS 変数で色変更可）
 // ここから定数定義とスタイル注入ヘルパー
 const STYLE_ID = "gcx-sarch-style"; // 注入する <link> の id（重複防止）
 const STYLE_PATH = "src/gcx-topbar.css"; // 読み込むスタイルシートのパス
 const TOPBAR_WRAP = "gcx-topbar"; // 検索 UI ラッパーのクラス
 const TOPBAR_INPUT = "gcx-topbar-input"; // 検索入力のクラス
 const TOPBAR_ID = "gcx-topbar-overlay"; // DOM 上の ID（重複防止）
+const SVG_NS = "http://www.w3.org/2000/svg";
+const ICON_PATH_DATA = [
+  "M172.625,102.4c-42.674,0-77.392,34.739-77.392,77.438c0,5.932,4.806,10.74,10.733,10.74c5.928,0,10.733-4.808,10.733-10.74c0-30.856,25.088-55.959,55.926-55.959c5.928,0,10.733-4.808,10.733-10.74C183.358,107.208,178.553,102.4,172.625,102.4z",
+  "M361.657,301.511c19.402-30.436,30.645-66.546,30.645-105.244C392.302,88.036,304.318,0,196.151,0c-38.676,0-74.765,11.25-105.182,30.663C66.734,46.123,46.11,66.759,30.659,91.008C11.257,121.444,0,157.568,0,196.267c0,108.217,87.998,196.266,196.151,196.266c38.676,0,74.779-11.264,105.197-30.677C325.582,346.396,346.206,325.76,361.657,301.511z M259.758,320.242c-19.075,9.842-40.708,15.403-63.607,15.403c-76.797,0-139.296-62.535-139.296-139.378c0-22.912,5.558-44.558,15.394-63.644c13.318-25.856,34.483-47.019,60.323-60.331c19.075-9.842,40.694-15.403,63.578-15.403c76.812,0,139.296,62.521,139.296,139.378c0,22.898-5.558,44.53-15.394,63.616C306.749,285.739,285.598,306.916,259.758,320.242z",
+  "M499.516,439.154L386.275,326.13c-16.119,23.552-36.771,44.202-60.309,60.345l113.241,113.024c8.329,8.334,19.246,12.501,30.148,12.501c10.916,0,21.833-4.167,30.162-12.501C516.161,482.83,516.161,455.822,499.516,439.154z",
+];
 
 // 注意: ensureStyles は CSS を注入するだけ。検索 UI 本体は createTopbar()/injectTopbar() で生成・挿入。
 function ensureStyles() {
@@ -141,6 +147,25 @@ async function loadLocalLibs() {
 
 // メニュー側への注入は削除し、トップバー専用に単純化
 
+function ensureSVG() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.classList.add("icon-svg");
+  svg.setAttribute("viewBox", "0 0 512 512");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("aria-hidden", "true");
+
+  ICON_PATH_DATA.forEach((d) => {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "currentColor");
+    svg.appendChild(path);
+  });
+
+  return svg;
+}
+
 // ===== トップバー UI（固定オーバーレイ） =====
 function createTopbar() {
   // 検索コンテナを生成（ロールとラベルは ARIA を付与）
@@ -148,6 +173,10 @@ function createTopbar() {
   wrap.classList.add(TOPBAR_WRAP);
   wrap.setAttribute("role", "search");
   wrap.setAttribute("aria-label", "クイック検索");
+  const icon = ensureSVG();
+
+  const field = document.createElement("div");
+  field.classList.add("svg-input-wrap");
 
   const input = document.createElement("input");
   input.type = "search";
@@ -173,7 +202,23 @@ function createTopbar() {
     "keyup",
   ].forEach((t) => input.addEventListener(t, stop, { passive: true }));
 
-  wrap.appendChild(input);
+  const suggestions = document.createElement("div");
+  suggestions.hidden = true;
+  suggestions.setAttribute("aria-live", "polite");
+
+  input.addEventListener("focus", () => {
+    suggestions.hidden = false;
+    suggestions.classList.add("gcx-suggestions");
+  });
+  input.addEventListener("blur", () => {
+    suggestions.hidden = true;
+    suggestions.classList.remove("gcx-suggestions");
+  });
+
+  field.appendChild(icon);
+  field.appendChild(input);
+  wrap.appendChild(field);
+  wrap.appendChild(suggestions);
   return wrap;
 }
 
