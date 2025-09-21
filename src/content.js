@@ -16,6 +16,15 @@ const ICON_PATH_DATA = [
   "M499.516,439.154L386.275,326.13c-16.119,23.552-36.771,44.202-60.309,60.345l113.241,113.024c8.329,8.334,19.246,12.501,30.148,12.501c10.916,0,21.833-4.167,30.162-12.501C516.161,482.83,516.161,455.822,499.516,439.154z",
 ];
 
+function collectStreamElements(root = document) {
+  const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
+  return elements.map((element, index) => ({
+    index: index + 1,
+    streamId: element.dataset.streamItemId || "",
+    element,
+  }));
+}
+
 // Classroom DOM reference (samples/Classroom-sample.html より)
 // - メイン領域: div[role="main"]（SPA でも維持されるロール属性）
 // - コース一覧ラッパー: div[role="main"] 内の ol[jsname="bN97Pc"] （class="JwPp0e avfKs" はハッシュ化）
@@ -296,3 +305,8 @@ if (document.readyState === "loading") {
 //     * 担当者: div.z07MGc.Vu2fZd.jJIbcc.T30lh → 教員名
 //     * 最新通知: div.xo2x2e > span.Y5vSD / span.nforOe
 // - カード内ショートカット（課題・ドライブなど）: div.SZ0kZe 以下の div.ne2Ple-oshW8e-V67aGc
+// jsmodel = "N2jS6b"ストリームタブの投稿クラス
+
+function getJsmodelElements(jsmodel) {
+  const jsmodel = window.document.querySelectorAll(`[jsmodel="${jsmodel}"]`);
+}
