@@ -16,16 +16,23 @@ const ICON_PATH_DATA = [
   "M499.516,439.154L386.275,326.13c-16.119,23.552-36.771,44.202-60.309,60.345l113.241,113.024c8.329,8.334,19.246,12.501,30.148,12.501c10.916,0,21.833-4.167,30.162-12.501C516.161,482.83,516.161,455.822,499.516,439.154z",
 ];
 
-function collectStreamElements(root = document) {
-  const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
-  return elements.map((element, index) => ({
-    index: index + 1,
-    streamId: element.dataset.streamItemId || "",
-    element,
-  }));
-}
+// Classroom DOM ラベル備忘録（安定属性のみ）
+// data-stream-item-id → ストリーム投稿ごとのユニーク ID
+// data-actor-name / data-entity-name → 投稿者（教師）の表示名
+// role="heading" + aria-level="2" → 投稿ヘッダー見出し（氏名と時刻が含まれる）
+// time[datetime][data-timestamp] → 投稿日時（ISO 文字列と UNIX ミリ秒）
+// data-stream-post-body → 投稿本文テキストを含むコンテナ
+// data-material-parent-id → 添付資料一覧のルート（投稿 ID と紐付く）
+// data-attachment-type → 添付アイテムの種類（driveFile, form など）
+// data-drive-id → Google ドライブ添付のファイル ID
+// aria-label / aria-labelledby → 代替テキストやタイトルの参照
+// role="link" / a[href] → 添付アイテムへのリンク本体
 
-// Classroom DOM reference (samples/Classroom-sample.html より)
+/*imgタグは先生のアイコン画像
+  h2タグに先生の名前　投稿：　〇〇　さん　のフォーマット
+  jsmodel="N2jS6b hGbFme BrMJ0e" data-material-parent-id="N2jS6b"data-stream-item-id="807074161069"PDFのラベル
+*/
+
 // - メイン領域: div[role="main"]（SPA でも維持されるロール属性）
 // - コース一覧ラッパー: div[role="main"] 内の ol[jsname="bN97Pc"] （class="JwPp0e avfKs" はハッシュ化）
 // - 各コースカード: li[data-course-id][data-user-id] （class="gHz6xd…" はハッシュ化、data-* は安定）
@@ -55,6 +62,89 @@ function ensureStyles() {
     console.warn(`[GCX] Failed to load stylesheet from ${href}`);
   });
   document.head.appendChild(link);
+}
+
+const STREAM_DB_NAME = "gcx-stream";
+const STREAM_DB_VERSION = 1;
+const STREAM_STORE_NAME = "posts";
+let streamDbPromise = null;
+
+function openStreamDatabase() {
+  if (streamDbPromise) return streamDbPromise;
+  if (!("indexedDB" in window)) {
+    streamDbPromise = Promise.resolve(null);
+    return streamDbPromise;
+  }
+
+  streamDbPromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(STREAM_DB_NAME, STREAM_DB_VERSION);
+
+    request.onupgradeneeded = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(STREAM_STORE_NAME)) {
+        const store = db.createObjectStore(STREAM_STORE_NAME, { keyPath: "streamId" });
+        store.createIndex("byTeacher", "teacherName", { unique: false });
+        store.createIndex("byDatetime", "postedAt.datetime", { unique: false });
+      }
+    };
+
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
+
+    request.onblocked = () => {
+      console.warn("[GCX] IndexedDB open request blocked");
+    };
+
+    request.onerror = () => reject(request.error);
+  });
+
+  return streamDbPromise;
+}
+
+async function persistStreamData(root = document) {
+  const posts = extractStreamData(root);
+  const db = await openStreamDatabase();
+  if (!db) return { stored: 0, posts };
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STREAM_STORE_NAME, "readwrite");
+    const store = tx.objectStore(STREAM_STORE_NAME);
+    const savedAt = Date.now();
+
+    for (const post of posts) {
+      const record = {
+        streamId: post.streamId,
+        index: post.index,
+        teacherName: post.teacherName,
+        postedAt: post.postedAt,
+        body: post.body,
+        attachments: post.attachments,
+        savedAt,
+      };
+      store.put(record);
+    }
+
+    tx.oncomplete = () => resolve({ stored: posts.length, posts });
+    tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
+    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+  });
+}
+
+async function loadStreamDataFromDb() {
+  const db = await openStreamDatabase();
+  if (!db) return [];
+
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STREAM_STORE_NAME, "readonly");
+    const store = tx.objectStore(STREAM_STORE_NAME);
+    const request = store.getAll();
+
+    request.onsuccess = () => resolve(request.result || []);
+    request.onerror = () => reject(request.error);
+  });
 }
 
 // 後方互換用の別名（古いコードが小文字関数名を呼ぶ場合のため）
@@ -296,17 +386,91 @@ if (document.readyState === "loading") {
   init();
 }
 
-// Classroom DOM reference (samples/Classroom-sample.html より)
-// - メイン領域: div[role="main"]（SPA でも維持されるロール属性）
-// - コース一覧ラッパー: div[role="main"] 内の ol[jsname="bN97Pc"] （class="JwPp0e avfKs" はハッシュ化）
-// - 各コースカード: li[data-course-id][data-user-id] （class="gHz6xd…" はハッシュ化、data-* は安定）
-//     * 本体ブロック: div.Tc9hUd.CNpREd.ee1HBc（クラス名は参考メモ：変化しやすい）
-//     * タイトル: div.ScpeUc.Vu2fZd.XwD7Ke → テキスト（例: 体育　３－１・M）
-//     * 担当者: div.z07MGc.Vu2fZd.jJIbcc.T30lh → 教員名
-//     * 最新通知: div.xo2x2e > span.Y5vSD / span.nforOe
-// - カード内ショートカット（課題・ドライブなど）: div.SZ0kZe 以下の div.ne2Ple-oshW8e-V67aGc
 // jsmodel = "N2jS6b"ストリームタブの投稿クラス
 
-function getJsmodelElements(jsmodel) {
-  const jsmodel = window.document.querySelectorAll(`[jsmodel="${jsmodel}"]`);
+// Classroom DOM ラベル備忘録（安定属性のみ）
+// data-stream-item-id → ストリーム投稿ごとのユニーク ID
+// data-actor-name / data-entity-name → 投稿者（教師）の表示名
+// role="heading" + aria-level="2" → 投稿ヘッダー見出し（氏名と時刻が含まれる）
+// time[datetime][data-timestamp] → 投稿日時（ISO 文字列と UNIX ミリ秒）
+// data-stream-post-body → 投稿本文テキストを含むコンテナ
+// data-material-parent-id → 添付資料一覧のルート（投稿 ID と紐付く）
+// data-attachment-type → 添付アイテムの種類（driveFile, form など）
+// data-drive-id → Google ドライブ添付のファイル ID
+// aria-label / aria-labelledby → 代替テキストやタイトルの参照
+// role="link" / a[href] → 添付アイテムへのリンク本体
+
+function normalizeWhitespace(value) {
+  if (value == null) return "";
+  return String(value).replace(/[\s\u00A0]+/g, " ").trim();
+}
+
+function collectStreamElements(root = document) {
+  const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
+  return elements.map((element, index) => ({
+    index: index + 1,
+    streamId: element.dataset.streamItemId || "",
+    element,
+  }));
+}
+
+function extractStreamData(root = document) {
+  const entries = collectStreamElements(root);
+  return entries.map(({ index, streamId, element }) => {
+    const header =
+      element.querySelector('[role="heading"][aria-level="2"]') || element;
+
+    const actorSource = header.querySelector(
+      '[data-actor-name], [data-entity-name]'
+    );
+    const actorText =
+      normalizeWhitespace(actorSource?.textContent) ||
+      normalizeWhitespace(header.textContent);
+
+    const timeEl = header.querySelector('time[datetime], [data-timestamp]');
+    const postedAt = {
+      text: normalizeWhitespace(timeEl?.textContent),
+      datetime:
+        timeEl?.getAttribute?.("datetime") ||
+        timeEl?.getAttribute?.("data-timestamp") ||
+        "",
+    };
+    const bodySource =
+      element.querySelector('[data-stream-post-body]') ||
+      element.querySelector('[jsname="r4nke"]');
+    const bodyText = normalizeWhitespace(bodySource?.textContent || "");
+
+    const attachmentNodes = element.querySelectorAll(
+      '[data-material-parent-id] [data-attachment-type], [data-material-parent-id] [role="link"], [data-material-parent-id] a[href]'
+    );
+
+    const attachments = [...attachmentNodes].map((att) => {
+      const linkElement = att.matches('[role="link"], a[href]')
+        ? att
+        : att.querySelector('[role="link"], a[href]');
+      const type =
+        att.getAttribute("data-attachment-type") ||
+        linkElement?.getAttribute("data-attachment-type") ||
+        "";
+      const driveId =
+        att.getAttribute("data-drive-id") ||
+        linkElement?.getAttribute("data-drive-id") ||
+        "";
+      const href = linkElement?.getAttribute("href") || "";
+      const title = normalizeWhitespace(
+        linkElement?.getAttribute("aria-label") || linkElement?.textContent || ""
+      );
+      return { type, driveId, href, title };
+    });
+
+    return {
+      index,
+      streamId,
+      teacherName: actorText,
+      postedAt,
+      body: bodyText,
+      attachments,
+      element,
+    };
+  });
 }
