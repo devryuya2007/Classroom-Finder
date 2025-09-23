@@ -64,86 +64,150 @@ function ensureStyles() {
   document.head.appendChild(link);
 }
 
+function extractStreamData(root = document) {
+  const entries = collectStreamElements(root);
+  return entries.map(({ index, streamId, element }) => {
+    const header =
+      element.querySelector('[role="heading"][aria-level="2"]') || element;
+
+    const actorSource = header.querySelector(
+      "[data-actor-name], [data-entity-name]"
+    );
+    const actorText =
+      normalizeWhitespace(actorSource?.textContent) ||
+      normalizeWhitespace(header.textContent);
+
+    const timeEl = header.querySelector("time[datetime], [data-timestamp]");
+    const postedAt = {
+      text: normalizeWhitespace(timeEl?.textContent),
+      datetime:
+        timeEl?.getAttribute?.("datetime") ||
+        timeEl?.getAttribute?.("data-timestamp") ||
+        "",
+    };
+    const bodySource =
+      element.querySelector("[data-stream-post-body]") ||
+      element.querySelector('[jsname="r4nke"]');
+    const bodyText = normalizeWhitespace(bodySource?.textContent || "");
+
+    const attachmentNodes = element.querySelectorAll(
+      '[data-material-parent-id] [data-attachment-type], [data-material-parent-id] [role="link"], [data-material-parent-id] a[href]'
+    );
+
+    const attachments = [...attachmentNodes].map((att) => {
+      const linkElement = att.matches('[role="link"], a[href]')
+        ? att
+        : att.querySelector('[role="link"], a[href]');
+      const type =
+        att.getAttribute("data-attachment-type") ||
+        linkElement?.getAttribute("data-attachment-type") ||
+        "";
+      const driveId =
+        att.getAttribute("data-drive-id") ||
+        linkElement?.getAttribute("data-drive-id") ||
+        "";
+      const href = linkElement?.getAttribute("href") || "";
+      const title = normalizeWhitespace(
+        linkElement?.getAttribute("aria-label") ||
+          linkElement?.textContent ||
+          ""
+      );
+      return { type, driveId, href, title };
+    });
+
+    return {
+      index,
+      streamId,
+      teacherName: actorText,
+      postedAt,
+      body: bodyText,
+      attachments,
+    };
+  });
+}
+
+function normalizeWhitespace(value) {
+  if (value == null) return "";
+  return String(value)
+    .replace(/[\s\u00A0]+/g, " ")
+    .trim();
+}
+
+function collectStreamElements(root = document) {
+  const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
+  return elements.map((element, index) => ({
+    index: index + 1,
+    streamId: element.dataset.streamItemId || "",
+    element,
+  }));
+}
+
 const STREAM_DB_NAME = "gcx-stream";
 const STREAM_DB_VERSION = 1;
 const STREAM_STORE_NAME = "posts";
-let streamDbPromise = null;
 
-function openStreamDatabase() {
-  if (streamDbPromise) return streamDbPromise;
-  if (!("indexedDB" in window)) {
-    streamDbPromise = Promise.resolve(null);
-    return streamDbPromise;
-  }
-
-  streamDbPromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(STREAM_DB_NAME, STREAM_DB_VERSION);
-
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STREAM_STORE_NAME)) {
-        const store = db.createObjectStore(STREAM_STORE_NAME, { keyPath: "streamId" });
-        store.createIndex("byTeacher", "teacherName", { unique: false });
-        store.createIndex("byDatetime", "postedAt.datetime", { unique: false });
-      }
-    };
-
-    request.onsuccess = () => {
-      const db = request.result;
-      db.onversionchange = () => db.close();
-      resolve(db);
-    };
-
-    request.onblocked = () => {
-      console.warn("[GCX] IndexedDB open request blocked");
-    };
-
-    request.onerror = () => reject(request.error);
-  });
-
-  return streamDbPromise;
+function openStreamDB() {
+  const request = indexedDB.open(STREAM_DB_NAME, STREAM_DB_VERSION);
+  request.onupgradeneeded = (event) => {
+    const db = event.target.result;
+    if (!db.objectStoreNames.contains(STREAM_STORE_NAME)) {
+      db.createObjectStore(STREAM_STORE_NAME, { keyPath: "streamId" });
+    }
+  };
+  return request;
 }
 
 async function persistStreamData(root = document) {
   const posts = extractStreamData(root);
-  const db = await openStreamDatabase();
-  if (!db) return { stored: 0, posts };
+  const request = openStreamDB();
 
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STREAM_STORE_NAME, "readwrite");
-    const store = tx.objectStore(STREAM_STORE_NAME);
-    const savedAt = Date.now();
-
-    for (const post of posts) {
-      const record = {
-        streamId: post.streamId,
-        index: post.index,
-        teacherName: post.teacherName,
-        postedAt: post.postedAt,
-        body: post.body,
-        attachments: post.attachments,
-        savedAt,
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result; //TODO:event.target.result;にリファクタしろ
+      const tx = db.transaction(STREAM_STORE_NAME, "readwrite");
+      const store = tx.objectStore(STREAM_STORE_NAME);
+      const savedAt = Date.now();
+      for (const post of posts) {
+        store.put({ ...post, savedAt });
+      }
+      tx.oncomplete = () => {
+        db.close();
+        resolve({ stored: posts.length, posts });
       };
-      store.put(record);
-    }
-
-    tx.oncomplete = () => resolve({ stored: posts.length, posts });
-    tx.onerror = () => reject(tx.error || new Error("IndexedDB transaction failed"));
-    tx.onabort = () => reject(tx.error || new Error("IndexedDB transaction aborted"));
+      tx.onerror = () => {
+        reject(tx.error || new Error("IndexedDB transaction failed"));
+        db.close();
+      };
+      tx.onabort = () => {
+        reject(new Error("Transaction aborted"));
+        db.close();
+        console.log(
+          "A transaction is aborted for reasons other than an error."
+        );
+      };
+    };
   });
 }
-
-async function loadStreamDataFromDb() {
-  const db = await openStreamDatabase();
-  if (!db) return [];
-
+async function loadStreamPostsFromDb() {
   return new Promise((resolve, reject) => {
-    const tx = db.transaction(STREAM_STORE_NAME, "readonly");
-    const store = tx.objectStore(STREAM_STORE_NAME);
-    const request = store.getAll();
-
-    request.onsuccess = () => resolve(request.result || []);
+    const request = openStreamDB();
     request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const tx = db.transaction(STREAM_STORE_NAME, "readonly");
+      const store = tx.objectStore(STREAM_STORE_NAME);
+      const getAll = store.getAll();
+
+      getAll.onsuccess = () => {
+        resolve(getAll.result || []);
+        db.close();
+      };
+      getAll.onerror = () => {
+        reject(getAll.error);
+        db.close();
+      };
+    };
   });
 }
 
@@ -399,78 +463,3 @@ if (document.readyState === "loading") {
 // data-drive-id → Google ドライブ添付のファイル ID
 // aria-label / aria-labelledby → 代替テキストやタイトルの参照
 // role="link" / a[href] → 添付アイテムへのリンク本体
-
-function normalizeWhitespace(value) {
-  if (value == null) return "";
-  return String(value).replace(/[\s\u00A0]+/g, " ").trim();
-}
-
-function collectStreamElements(root = document) {
-  const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
-  return elements.map((element, index) => ({
-    index: index + 1,
-    streamId: element.dataset.streamItemId || "",
-    element,
-  }));
-}
-
-function extractStreamData(root = document) {
-  const entries = collectStreamElements(root);
-  return entries.map(({ index, streamId, element }) => {
-    const header =
-      element.querySelector('[role="heading"][aria-level="2"]') || element;
-
-    const actorSource = header.querySelector(
-      '[data-actor-name], [data-entity-name]'
-    );
-    const actorText =
-      normalizeWhitespace(actorSource?.textContent) ||
-      normalizeWhitespace(header.textContent);
-
-    const timeEl = header.querySelector('time[datetime], [data-timestamp]');
-    const postedAt = {
-      text: normalizeWhitespace(timeEl?.textContent),
-      datetime:
-        timeEl?.getAttribute?.("datetime") ||
-        timeEl?.getAttribute?.("data-timestamp") ||
-        "",
-    };
-    const bodySource =
-      element.querySelector('[data-stream-post-body]') ||
-      element.querySelector('[jsname="r4nke"]');
-    const bodyText = normalizeWhitespace(bodySource?.textContent || "");
-
-    const attachmentNodes = element.querySelectorAll(
-      '[data-material-parent-id] [data-attachment-type], [data-material-parent-id] [role="link"], [data-material-parent-id] a[href]'
-    );
-
-    const attachments = [...attachmentNodes].map((att) => {
-      const linkElement = att.matches('[role="link"], a[href]')
-        ? att
-        : att.querySelector('[role="link"], a[href]');
-      const type =
-        att.getAttribute("data-attachment-type") ||
-        linkElement?.getAttribute("data-attachment-type") ||
-        "";
-      const driveId =
-        att.getAttribute("data-drive-id") ||
-        linkElement?.getAttribute("data-drive-id") ||
-        "";
-      const href = linkElement?.getAttribute("href") || "";
-      const title = normalizeWhitespace(
-        linkElement?.getAttribute("aria-label") || linkElement?.textContent || ""
-      );
-      return { type, driveId, href, title };
-    });
-
-    return {
-      index,
-      streamId,
-      teacherName: actorText,
-      postedAt,
-      body: bodyText,
-      attachments,
-      element,
-    };
-  });
-}
