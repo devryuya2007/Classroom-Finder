@@ -215,11 +215,30 @@ async function loadStreamPostsFromDb() {
   });
 }
 
-// ２つのオブジェが違うかどうか、
+// ２つのオブジェが違うかどうか、同じじゃないならtrue
 function diffPosts(oldList, newList) {
   if (oldList.length !== newList.length) return true;
   const map = new Map(oldList.map((p) => [p.streamId, JSON.stringify(p)]));
   return newList.some((p) => map.get(p.streamId) !== JSON.stringify(p));
+}
+
+let syncInFlight = false;
+
+//非同期でloadStreamPostsFromDbとextractStreamDataを比べる。
+async function syncStreamPosts(root = document) {
+  if (syncInFlight) return;
+  syncInFlight = true;
+  try {
+    const [savedPosts, currentPosts] = await Promise.all([
+      loadStreamPostsFromDb(),
+      Promise.resolve(extractStreamData(root)),
+    ]);
+    if (diffPosts(savedPosts, currentPosts)) {
+      await persistStreamData(root);
+    }
+  } finally {
+    syncInFlight = false;
+  }
 }
 
 // 後方互換用の別名（古いコードが小文字関数名を呼ぶ場合のため）
@@ -431,16 +450,24 @@ function ensureTopbar() {
 }
 
 function observe() {
+  void syncStreamPosts().catch(console.error);
   // DOM 変化を監視し、必要に応じて再注入（軽量）
   const observer = new MutationObserver((mutations) => {
-    if (mutations.some((m) => m.type === "childList")) {
+    if (
+      mutations.some(
+        (m) => m.type === "childList" || m.type === "characterData"
+      )
+    ) {
       ensureTopbar();
+      void syncStreamPosts().catch(console.error);
     }
   });
   const target = document.body || document.documentElement;
   if (target) {
     observer.observe(target, {
       childList: true,
+      subtree: true,
+      characterData: true,
     });
   }
   // 監視で取りこぼした場合のフォールバックとして定期チェック
