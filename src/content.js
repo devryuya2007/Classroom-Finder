@@ -64,6 +64,7 @@ function ensureStyles() {
   document.head.appendChild(link);
 }
 
+//取得してオブジェクトにして返す。
 function extractStreamData(root = document) {
   const entries = collectStreamElements(root);
   return entries.map(({ index, streamId, element }) => {
@@ -125,14 +126,14 @@ function extractStreamData(root = document) {
     };
   });
 }
-
+//文字列化し、半角スペースに統一して返す
 function normalizeWhitespace(value) {
   if (value == null) return "";
   return String(value)
     .replace(/[\s\u00A0]+/g, " ")
     .trim();
 }
-
+//extractStreamDataからindex streamId + elementを返す（配列 > オブジェ。）
 function collectStreamElements(root = document) {
   const elements = [...(root?.querySelectorAll("[data-stream-item-id]") || [])];
   return elements.map((element, index) => ({
@@ -146,6 +147,7 @@ const STREAM_DB_NAME = "gcx-stream";
 const STREAM_DB_VERSION = 1;
 const STREAM_STORE_NAME = "posts";
 
+// streamIdを主としてopen
 function openStreamDB() {
   const request = indexedDB.open(STREAM_DB_NAME, STREAM_DB_VERSION);
   request.onupgradeneeded = (event) => {
@@ -156,7 +158,7 @@ function openStreamDB() {
   };
   return request;
 }
-
+// openしたstoreにextractStreamData()をそのまま追加
 async function persistStreamData(root = document) {
   const posts = extractStreamData(root);
   const request = openStreamDB();
@@ -189,6 +191,8 @@ async function persistStreamData(root = document) {
     };
   });
 }
+
+// DBの中身を取得
 async function loadStreamPostsFromDb() {
   return new Promise((resolve, reject) => {
     const request = openStreamDB();
@@ -209,6 +213,13 @@ async function loadStreamPostsFromDb() {
       };
     };
   });
+}
+
+// ２つのオブジェが違うかどうか、
+function diffPosts(oldList, newList) {
+  if (oldList.length !== newList.length) return true;
+  const map = new Map(oldList.map((p) => [p.streamId, JSON.stringify(p)]));
+  return newList.some((p) => map.get(p.streamId) !== JSON.stringify(p));
 }
 
 // 後方互換用の別名（古いコードが小文字関数名を呼ぶ場合のため）
