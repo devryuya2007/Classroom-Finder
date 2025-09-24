@@ -474,6 +474,12 @@ function observe() {
   setInterval(() => ensureTopbar(), 2000);
 }
 
+let fuse;
+
+function onSerchInput() {
+  const query = event.target.value.trim();
+}
+
 function init() {
   // 初期化フロー: スタイル注入 → ライブラリ読み込み → UI 注入 → DOM 監視
   ensureTopbar();
