@@ -2,6 +2,9 @@
 // - ネットワーク通信は行わず、DOM 監視で UI を差し込むだけ
 // - スタイルは外部 CSS を <link> で一度だけ注入（UI 本体は後段で生成）
 // - 検索アイコンはインライン SVG 要素で描画（CSS 変数で色変更可）
+
+const { createElement } = require("react");
+
 // ここから定数定義とスタイル注入ヘルパー
 const STYLE_ID = "gcx-sarch-style"; // 注入する <link> の id（重複防止）
 const STYLE_PATH = "src/gcx-topbar.css"; // 読み込むスタイルシートのパス
@@ -293,9 +296,9 @@ function addScript(src, attrs = {}) {
     document.head.appendChild(s);
   });
 }
+// 既に同じ名札(data-gcx-lib)の <script> が head にあるか
 
 function alreadyInjected(marker) {
-  // 既に同じ名札(data-gcx-lib)の <script> が head にあるか
   return !!document.head.querySelector(`script[data-gcx-lib="${marker}"]`);
 }
 
@@ -369,7 +372,7 @@ function ensureSVG() {
 
   return svg;
 }
-// containerにulがなかったらulをcontainerをappend
+// containerにulがなかったらulをcontainerにappend
 function ensureSuggestionsStructure(container) {
   if (!container) return null;
   let list = container.querySelector("ul");
@@ -428,7 +431,7 @@ function createTopbar() {
   input.addEventListener("blur", () => {
     wrap.classList.remove(EXPANDED_CLASS);
   });
-  input.addEventListener("input", handler);
+  input.addEventListener("input", onSerchInput);
 
   field.appendChild(icon);
   field.appendChild(input);
@@ -436,7 +439,7 @@ function createTopbar() {
   wrap.appendChild(field);
   return wrap;
 }
-
+//Topbarにidを付与してbodyに挿入
 function ensureTopbar() {
   ensureStyles();
   if (!document.body) return null;
@@ -449,7 +452,7 @@ function ensureTopbar() {
   }
   return topbar;
 }
-
+//DOMを監視して変化があれば再挿入
 function observe() {
   void syncStreamPosts().catch(console.error);
   // DOM 変化を監視し、必要に応じて再注入（軽量）
@@ -476,7 +479,7 @@ function observe() {
 }
 
 let fuse;
-
+//ユーザーからの入力をfuseのsearchにかけている。返り値は{item,score,refindex,...}
 function onSerchInput(event) {
   const query = event.target.value.trim();
   if (!query || !fuse) {
@@ -486,7 +489,7 @@ function onSerchInput(event) {
   const results = fuse.search(query);
   renderSuggestions(results.map((item) => item.item)); //{item,score,refindex,...}
 }
-
+//　ヒットしたfuseのうちitemをliに入れる。fragmentで一括で入れている。。
 function renderSuggestions(items = []) {
   const container = document.querySelector(".gcx-suggestions");
   if (!container) return;
@@ -496,7 +499,7 @@ function renderSuggestions(items = []) {
   list.replaceChildren();
 
   if (!items.length) {
-    container.classList.remove("has-results");
+    container.classList.remove("has-results"); //非表示や余白調整
     return;
   }
 
