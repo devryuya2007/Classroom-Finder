@@ -98,14 +98,61 @@
   margin: 0;
   padding: 0;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-.has-results {
-  font-size: 10px;
+.gcx-topbar .suggestion-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(60, 64, 67, 0.08);
+  transition: background 0.15s ease;
 }
 
-.suggestion-item {
-  color: #000;
+.gcx-topbar .suggestion-item:hover,
+.gcx-topbar .suggestion-item:focus-within {
+  background: rgba(60, 64, 67, 0.16);
+}
+
+.gcx-topbar .suggestion-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: #202124;
+}
+
+.gcx-topbar .suggestion-teacher {
+  font-weight: 600;
+}
+
+.gcx-topbar .suggestion-time {
+  font-size: 11px;
+  color: #5f6368;
+}
+
+.gcx-topbar .suggestion-body {
+  font-size: 13px;
+  color: #3c4043;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gcx-topbar .gcx-suggestions.has-results {
+  margin-top: 10px;
+  max-height: 220px;
+  padding: 16px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
 }
 
 @media (max-width: 600px) {

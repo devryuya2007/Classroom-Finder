@@ -12,5 +12,8 @@
     "build": "echo 'No build step required. Optionally add Vite/Rollup.'",
     "test": "echo 'No tests defined' && exit 0",
     "lint": "echo 'ESLint not configured yet' && exit 0"
+  },
+  "dependencies": {
+    "fuse.js": "^6.6.2"
   }
 }

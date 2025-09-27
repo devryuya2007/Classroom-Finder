@@ -2,9 +2,6 @@
 // - ネットワーク通信は行わず、DOM 監視で UI を差し込むだけ
 // - スタイルは外部 CSS を <link> で一度だけ注入（UI 本体は後段で生成）
 // - 検索アイコンはインライン SVG 要素で描画（CSS 変数で色変更可）
-
-const { createElement } = require("react");
-
 // ここから定数定義とスタイル注入ヘルパー
 const STYLE_ID = "gcx-sarch-style"; // 注入する <link> の id（重複防止）
 const STYLE_PATH = "src/gcx-topbar.css"; // 読み込むスタイルシートのパス
@@ -238,6 +235,10 @@ async function syncStreamPosts(root = document) {
     ]);
     if (diffPosts(savedPosts, currentPosts)) {
       await persistStreamData(root);
+      const updated = await loadStreamPostsFromDb();
+      if (fuse) {
+        fuse.setCollection(updated); //元データが増えたら最新の配列に差し替えるAPI
+      }
     }
   } finally {
     syncInFlight = false;
@@ -251,15 +252,7 @@ const ensurestyle = ensureStyles;
 const LIB_SPECS = {
   fuse: {
     marker: "Fuse", // 名札（<script data-gcx-lib="Fuse">）重複注入の識別に使用
-    sources: ["src/libs/fuse.min.js"],
-  },
-  idb: {
-    marker: "idb",
-    sources: ["src/libs/idb.min.js"],
-  },
-  hotkeys: {
-    marker: "hotkeys",
-    sources: ["src/libs/hotkeys.min.js"],
+    sources: ["src/libs/fuse.esm.js"],
   },
 };
 
@@ -277,30 +270,7 @@ function getExtensionURL(relativePath) {
   return relativePath;
 }
 
-function addScript(src, attrs = {}) {
-  // 動的に <script> を生成して読み込む
-  // - src: URL 文字列（相対/絶対）
-  // - attrs: { 属性名: 値 } のプレーンオブジェクト（data-* 等を想定）
-  // - 成功(load): 実行完了後に src で resolve
-  // - 失敗(error): エラーで reject
-  return new Promise((resolve, reject) => {
-    const s = document.createElement("script");
-    s.src = src;
-    s.async = true; // 動的挿入の既定。順序保証はしないため依存順は呼び出し側で await 直列化する。
-    // 属性は data-* を中心に明示付与（重複注入の検知や CORS 制御に利用）
-    for (const [k, v] of Object.entries(attrs)) {
-      if (v != null) s.setAttribute(k, v); // 値は文字列化される。ブール属性は presence 管理が必要な場合あり。
-    }
-    s.addEventListener("load", () => resolve(src));
-    s.addEventListener("error", () => reject(new Error(`Failed: ${src}`)));
-    document.head.appendChild(s);
-  });
-}
-// 既に同じ名札(data-gcx-lib)の <script> が head にあるか
 
-function alreadyInjected(marker) {
-  return !!document.head.querySelector(`script[data-gcx-lib="${marker}"]`);
-}
 
 // 指定ライブラリを拡張パッケージから読み込む（開発・本番共通）
 // 戻り値: Promise<boolean>（成功 true / 全候補失敗 false）
@@ -309,48 +279,48 @@ function alreadyInjected(marker) {
 //  2) 既に注入済みなら true
 //  3) 候補 URL を順に直列で試す（最初に成功した時点で終了）
 //  4) 結果を CustomEvent "gcx:libs-loaded" で通知
-async function injectLib(name) {
-  const spec = LIB_SPECS[name];
-  if (!spec) return false;
-  if (alreadyInjected(spec.marker)) return true;
-  let lastErr; // 直近の失敗（全滅時のイベント detail 用）
-  for (const relative of spec.sources) {
-    const url = getExtensionURL(relative);
-    try {
-      await addScript(url, { "data-gcx-lib": spec.marker });
-      const detail = {
-        name,
-        success: true,
-        message: "",
-        source: url,
-      };
-      window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
-      return true;
-    } catch (err) {
-      lastErr = err;
-    }
-  }
 
-  const detail = {
-    name,
-    success: false,
-    message: String(lastErr || ""),
-    source: LIB_SPECS[name]?.sources.at(-1) || "",
-  };
-  window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
-  return false;
+//　FuseをESModule形式でインポート　その他のライブラリはIIFS
+async function injectLib(name) {
+  if (name !== "fuse") return false;
+  if (window.Fuse) return true;
+  const url = getExtensionURL(LIB_SPECS.fuse.sources[0]);
+  try {
+    const module = await import(url);
+    const FuseExport = module?.default || module?.Fuse || module;
+    if (typeof FuseExport !== "function") {
+      throw new Error("Fuse module did not export a constructor");
+    }
+    window.Fuse = FuseExport;
+    const detail = {
+      name,
+      success: true,
+      message: "",
+      source: url,
+    };
+    window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
+    return true;
+  } catch (err) {
+    const detail = {
+      name,
+      success: false,
+      message: String(err || ""),
+      source: url,
+    };
+    window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
+    return false;
+  }
 }
 
-// ローカルバンドルをまとめて読み込む
 async function loadLocalLibs() {
   try {
-    const names = Object.keys(LIB_SPECS);
-    const results = await Promise.all(names.map((name) => injectLib(name)));
-    return results.every(Boolean);
+    return await injectLib("fuse");
   } catch {
     return false;
   }
 }
+
+
 
 // メニュー側への注入は削除し、トップバー専用に単純化
 
@@ -479,6 +449,7 @@ function observe() {
 }
 
 const options = {
+  includeMatches: true,
   includeScore: true,
   shouldSort: true,
   threshold: 0.3,
@@ -488,10 +459,11 @@ const options = {
     { name: "attachments.title", weight: 0.2 },
     { name: "postedAt.text", weight: 0.05 },
   ],
-  minMatchCharLength: 2,
+  minMatchCharLength: 1,
 };
 
-let fuse = null;
+//fuseを作る。
+let fuse;
 async function initFuse() {
   try {
     const posts = await loadStreamPostsFromDb();
@@ -530,7 +502,24 @@ function renderSuggestions(items = []) {
   for (const item of items) {
     const li = document.createElement("li");
     li.classList.add("suggestion-item");
-    li.textContent = typeof item === "string" ? item : "";
+
+    const header = document.createElement("div");
+    header.classList.add("suggestion-header");
+
+    const teacher = document.createElement("span");
+    teacher.classList.add("suggestion-teacher");
+    teacher.textContent = item.teacherName || "(不明)";
+
+    const time = document.createElement("time");
+    time.classList.add("suggestion-time");
+    time.textContent = item.postedAt?.text || "";
+    header.append(teacher, time);
+
+    const body = document.createElement("div");
+    body.classList.add("suggestion-body");
+    body.textContent = item.body || "";
+
+    li.append(header, body);
     fragment.appendChild(li);
   }
 
@@ -538,11 +527,11 @@ function renderSuggestions(items = []) {
   container.classList.add("has-results");
 }
 
-function init() {
+async function init() {
   // 初期化フロー: スタイル注入 → ライブラリ読み込み → UI 注入 → DOM 監視
   ensureTopbar();
-  loadLocalLibs();
-  initFuse();
+  await loadLocalLibs();
+  await initFuse();
   observe();
   console.debug("[GCX] search input injection initialized");
 }
