@@ -281,7 +281,7 @@ const STREAM_SELECTOR_PRIMARY =
 const STREAM_SELECTOR_FALLBACK =
   'c-wiz[jsmodel*="N2jS6b"], article[jsmodel*="N2jS6b"], li[jsmodel*="N2jS6b"]';
 // data-stream-item-id or data-item-id をまとめて探す共通セレクタ
-const STREAM_ID_SELECTOR = '[data-stream-item-id], [data-item-id]';
+const STREAM_ID_SELECTOR = "[data-stream-item-id], [data-item-id]";
 
 let domFallbackLogged = false; // 初心者向けメモ: 同じ警告を何度も出さないためのフラグ
 let idFallbackLogged = false;
@@ -349,10 +349,9 @@ function deriveStreamId({
   postedAt,
   bodyText,
 }) {
-  const descendantCarrier =
-    element?.matches?.(STREAM_ID_SELECTOR)
-      ? element
-      : element?.querySelector?.(STREAM_ID_SELECTOR);
+  const descendantCarrier = element?.matches?.(STREAM_ID_SELECTOR)
+    ? element
+    : element?.querySelector?.(STREAM_ID_SELECTOR);
   // 初心者向けメモ: descendantCarrier は「子孫にある ID 持ちの要素」。
   // directId を探すときに最後の切り札として使うイメージ。
   const directId =
@@ -438,7 +437,9 @@ async function persistStreamData(rootOrPosts = document) {
         stored.push(record);
       });
       if (!stored.length) {
-        console.warn("[GCX] No posts persisted. Check selector / parser logic.");
+        console.warn(
+          "[GCX] No posts persisted. Check selector / parser logic."
+        );
       }
       tx.oncomplete = () => {
         db.close();
@@ -905,6 +906,15 @@ if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", init, { once: true });
 } else {
   init();
+}
+
+if (typeof window !== "undefined") {
+  window.__gcxDebug = {
+    extractStreamData,
+    loadStreamPostsFromDb,
+    syncStreamPosts,
+    getFuse: () => fuse,
+  };
 }
 
 // jsmodel = "N2jS6b"ストリームタブの投稿クラス
