@@ -17,34 +17,6 @@ const ICON_PATH_DATA = [
   "M499.516,439.154L386.275,326.13c-16.119,23.552-36.771,44.202-60.309,60.345l113.241,113.024c8.329,8.334,19.246,12.501,30.148,12.501c10.916,0,21.833-4.167,30.162-12.501C516.161,482.83,516.161,455.822,499.516,439.154z",
 ];
 
-// Classroom DOM ラベル備忘録（安定属性のみ）
-// data-stream-item-id → ストリーム投稿ごとのユニーク ID
-// data-actor-name / data-entity-name → 投稿者（教師）の表示名
-// role="heading" + aria-level="2" → 投稿ヘッダー見出し（氏名と時刻が含まれる）
-// time[datetime][data-timestamp] → 投稿日時（ISO 文字列と UNIX ミリ秒）
-// data-stream-post-body → 投稿本文テキストを含むコンテナ
-// data-material-parent-id → 添付資料一覧のル ート（投稿 ID と紐付く）
-// data-attachment-type → 添付アイテムの種類（driveFile, form など）
-// data-drive-id → Google ドライブ添付のファイル ID
-// aria-label / aria-labelledby → 代替テキストやタイトルの参照
-// role="link" / a[href] → 添付アイテムへのリンク本体
-
-/*imgタグは先生のアイコン画像
-  h2タグに先生の名前　投稿：　〇〇　さん　のフォーマット
-  jsmodel="N2jS6b hGbFme BrMJ0e" data-material-parent-id="N2jS6b"data-stream-item-id="807074161069"PDFのラベル
-*/
-
-// - メイン領域: div[role="main"]（SPA でも維持されるロール属性）
-// - コース一覧ラッパー: div[role="main"] 内の ol[jsname="bN97Pc"] （class="JwPp0e avfKs" はハッシュ化）
-// - 各コースカード: li[data-course-id][data-user-id] （class="gHz6xd…" はハッシュ化、data-* は安定）
-//     * 本体ブロック: div.Tc9hUd.CNpREd.ee1HBc（クラス名は参考メモ：変化しやすい）
-//     * タイトル: div.ScpeUc.Vu2fZd.XwD7Ke → テキスト（例: 体育　３－１・M）
-//     * 担当者: div.z07MGc.Vu2fZd.jJIbcc.T30lh → 教員名
-//     * 最新通知: div.xo2x2e > span.Y5vSD / span.nforOe
-// - カード内ショートカット（課題・ドライブなど）: div.SZ0kZe 以下の div.ne2Ple-oshW8e-V67aGc
-
-// 旧 DOM フォールバックは廃止
-
 // 注意: ensureStyles は CSS を注入するだけ。検索 UI 本体は createTopbar()/injectTopbar() で生成・挿入。
 function ensureStyles() {
   const href = getExtensionURL(STYLE_PATH);
@@ -184,16 +156,6 @@ async function fetchAllAnnouncementsPosts() {
   return posts;
 }
 
-// Page bridge removed (API usage only)
-
-// requestStreamDataFromPage removed (API usage only)
-
-// collectPostsFromPageContext removed (API usage only)
-
-// parseBridgePayload removed (API usage only)
-
-// flattenArray removed (API usage only)
-
 function normalizeAttachments(materials) {
   if (!Array.isArray(materials)) return [];
   return materials
@@ -245,119 +207,6 @@ function normalizeAttachments(materials) {
     .filter(Boolean);
 }
 
-// 旧 DOM 解析ロジックは削除（API 取得に一本化）
-//jsnameを使ってDOMを取得
-function collectJsnameTexts(scope) {
-  if (!scope) return [];
-  const results = [];
-  const seen = new Set();
-  scope.querySelectorAll("[jsname]").forEach((node) => {
-    if (!node || node.getAttribute?.("aria-hidden") === "true") return;
-    const text = normalizeWhitespace(node.textContent || "");
-    if (!text) return;
-    const key = `${node.getAttribute("jsname") || ""}|${text}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    results.push({ node, text, jsname: node.getAttribute("jsname") || "" });
-  });
-  return results;
-}
-
-function textFromSelectors(scope, selectors = []) {
-  if (!scope) return "";
-  for (const selector of selectors) {
-    const node = scope.querySelector(selector);
-    if (node) {
-      const text = normalizeWhitespace(node.textContent || "");
-      if (text) return text;
-    }
-  }
-  return "";
-}
-
-function selectTeacherText(headerTexts, fallbackText = "", headerScope) {
-  const preferred = textFromSelectors(headerScope, [
-    ".Vu2fZd.asQXV",
-    ".lziZub .Vu2fZd",
-  ]);
-  if (preferred) return stripHonorifics(preferred);
-
-  const teacherHints =
-    /さん|先生|教員|教師|投稿者|作成者|shared by|posted by|先生から|教師から/i;
-  const candidateByHint = headerTexts.find(({ text }) =>
-    teacherHints.test(text)
-  );
-  if (candidateByHint) return stripHonorifics(candidateByHint.text);
-
-  const shortCandidate = headerTexts
-    .filter(({ text }) => text.length <= 40 && text.split(/\s+/).length <= 6)
-    .sort((a, b) => a.text.length - b.text.length)[0];
-  if (shortCandidate) return stripHonorifics(shortCandidate.text);
-
-  if (fallbackText) {
-    return stripHonorifics(fallbackText.split(/\s+/)[0] || fallbackText);
-  }
-  return "";
-}
-
-function stripHonorifics(value) {
-  return normalizeWhitespace(
-    value
-      .replace(/さん|先生|先生方|先生から|教師から/g, "")
-      .replace(/^投稿\s*:?\s*/, "")
-  );
-}
-
-function selectTimeText(headerTexts, fallback = "", headerScope) {
-  const explicit = textFromSelectors(headerScope, [
-    ".IMvYId.dDKhVc.Vu2fZd",
-    ".IMvYId .jzdBjc",
-  ]);
-  if (explicit) return explicit;
-
-  const timePattern = /[0-9０-９年月日時分秒前後週曜日AMPM午前午後\.\/:\-]/i;
-  const candidate = headerTexts.find(({ text }) => timePattern.test(text));
-  if (candidate) return candidate.text;
-  return fallback;
-}
-
-function selectBodyText(element, header) {
-  const preferred = textFromSelectors(element, [
-    '[jsname="z3vRcc"]',
-    ".lziZub .jzdBjc",
-    ".n8L8cc .jzdBjc",
-  ]);
-  if (preferred) return preferred;
-
-  const bodyCandidates = collectJsnameTexts(element).filter(
-    ({ node, text }) => {
-      if (!text) return false;
-      if (header && header.contains(node)) return false;
-      if (node.closest("nav, button, label, svg")) return false;
-      if (node.getAttribute("role") === "button") return false;
-      return text.length >= 4;
-    }
-  );
-
-  bodyCandidates.sort((a, b) => b.text.length - a.text.length);
-  if (bodyCandidates.length) {
-    return bodyCandidates[0].text;
-  }
-
-  const legacySource =
-    element.querySelector("[data-stream-post-body]") ||
-    element.querySelector('[jsname="r4nke"]');
-  if (legacySource) {
-    return normalizeWhitespace(legacySource.textContent || "");
-  }
-
-  const fullText = normalizeWhitespace(element.textContent || "");
-  const headerText = normalizeWhitespace(header?.textContent || "");
-  if (headerText && fullText.startsWith(headerText)) {
-    return normalizeWhitespace(fullText.slice(headerText.length));
-  }
-  return fullText;
-}
 //文字列化し、半角スペースに統一して返す
 function normalizeWhitespace(value) {
   if (value == null) return "";
@@ -721,8 +570,6 @@ async function loadLocalLibs() {
   }
 }
 
-// メニュー側への注入は削除し、トップバー専用に単純化
-
 // フォーカス制御専用のクラス（オブジェクト指向で管理）
 class TopbarFocusController {
   // wrapElement: .gcx-topbar の要素をそのまま受け取る
@@ -854,7 +701,6 @@ function ensureTopbar() {
   }
   return topbar;
 }
-//DOMを監視して変化があれば再挿入
 function observe() {
   // DOM 監視は不要。トップバー状態の維持と API 同期のみ行う。
   ensureTopbar();
@@ -970,7 +816,6 @@ function rerunLastQuery() {
 }
 
 async function init() {
-  // 初期化フロー: スタイル注入 → ライブラリ読み込み → 初期同期 → UI 注入 → DOM 監視
   ensureTopbar();
   await loadLocalLibs();
   try {

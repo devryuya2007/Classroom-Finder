@@ -3,6 +3,7 @@
   "name": "Classroom-Finder",
   "version": "1.0.0",
   "description": "Google Classroom に高速横断検索を追加",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAt8zNAlcZVVfy+UNwOD8Qx3HVR3ghLG4QPo1H6tF4UJvGr1ouGqMVx7lDDfpadQggnKeCd02RZhtOljYe4u+xfwzQEX1tnHerJVR4sjSq04drirC4eexDksFL21/JUSk2FP5GiY8Nhl/n9Y8UR8quPwcNHTzPu3sKCQa5T7oIZYE9wjripLqakfviArIaqCRnn7Lypl2PvMraC0A1Nc4eqGWHsjF2UNHthlySn1Nb+zDcHKBB3VBK2vlmtoIJ+djVHhNOwxBPhXA7Spt+4t+YvUK1m6g3T6H2Ild0NMxOTlXLYPCFCz8OiQoLxpBfqta1pV6hkqR592E6yJPTLtt+DwIDAQAB",
   "permissions": ["storage", "scripting", "identity"],
   "host_permissions": [
     "https://classroom.google.com/*",
@@ -31,7 +32,7 @@
     "type": "module"
   },
   "oauth2": {
-    "client_id": "742269214393-09b86048vhc6su0ii3ra90b8hlqrqqld.apps.googleusercontent.com",
+    "client_id": "742269214393-qqmtj4pgku79831q0pi9s0vh236tc7cl.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/classroom.courses.readonly",
       "https://www.googleapis.com/auth/classroom.announcements.readonly"
