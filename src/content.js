@@ -55,6 +55,7 @@ function ensureStyles() {
 }
 
 // ===== Google Classroom API helper =====
+// バックグラウンドに依頼して Classroom API を叩く
 async function bgFetch(request) {
   return new Promise((resolve, reject) => {
     try {
@@ -72,7 +73,7 @@ async function bgFetch(request) {
     }
   });
 }
-
+//　すべてのコース一覧を取得し、配列を返す
 async function listAllCourses() {
   const courses = [];
   let pageToken = undefined;
@@ -86,7 +87,7 @@ async function listAllCourses() {
   } while (pageToken);
   return courses;
 }
-
+//　すべてのストリーム投稿を取得し返す
 async function listAnnouncementsForCourse(courseId) {
   const items = [];
   let pageToken = undefined;
@@ -100,7 +101,7 @@ async function listAnnouncementsForCourse(courseId) {
   } while (pageToken);
   return items;
 }
-
+//　取得したものを整形している。返り値はオブジェ
 function mapAnnouncementToPost(ann, course, index) {
   const id = normalizeStreamId(ann.id || "");
   const teacherName = normalizeWhitespace(course?.name || "");
@@ -129,12 +130,14 @@ function mapAnnouncementToPost(ann, course, index) {
   };
 }
 
+// 全コースを走査してアナウンス投稿を収集
 async function fetchAllAnnouncementsPosts() {
   const courses = await listAllCourses();
   const posts = [];
   let counter = 0;
   const concurrency = 5;
   let i = 0;
+  // 並列取得用のワーカー（コースを順番に処理）
   async function worker() {
     while (i < courses.length) {
       const idx = i++;
@@ -156,6 +159,7 @@ async function fetchAllAnnouncementsPosts() {
   return posts;
 }
 
+// API response の添付情報を共通形式へ変換
 function normalizeAttachments(materials) {
   if (!Array.isArray(materials)) return [];
   return materials
@@ -163,6 +167,7 @@ function normalizeAttachments(materials) {
       if (!material || typeof material !== "object") return null;
 
       if (material.driveFile && material.driveFile.driveFile) {
+        // Google Drive 添付を共通フォーマットに整理
         const file = material.driveFile.driveFile;
         return {
           type: "driveFile",
@@ -449,6 +454,7 @@ function ensureStableStreamId(post, fallbackIndex = 0) {
   return `auto-${hashString(seed)}`;
 }
 
+// 既存データと突き合わせて新規投稿のみ抽出
 function findNewPosts(oldList, newList) {
   const known = new Set();
 
@@ -508,6 +514,7 @@ const LIB_SPECS = {
   },
 };
 
+// 拡張内リソースの絶対URLを解決
 function getExtensionURL(relativePath) {
   try {
     if (typeof chrome !== "undefined" && chrome.runtime?.getURL) {
@@ -562,6 +569,7 @@ async function injectLib(name) {
   }
 }
 
+// ローカル同梱ライブラリを読み込む
 async function loadLocalLibs() {
   try {
     return await injectLib("fuse");
@@ -598,6 +606,7 @@ class TopbarFocusController {
   }
 }
 
+// トップバーの虫眼鏡アイコンを生成
 function ensureSVG() {
   const svg = document.createElementNS(SVG_NS, "svg");
   svg.classList.add("icon-svg");
@@ -701,6 +710,7 @@ function ensureTopbar() {
   }
   return topbar;
 }
+// トップバーを維持しつつデータ同期を定期実行
 function observe() {
   // DOM 監視は不要。トップバー状態の維持と API 同期のみ行う。
   ensureTopbar();
@@ -730,6 +740,7 @@ const options = {
 let fuse;
 // IndexedDB からの読み込みが終わるまでの間に入力されたキーワードを保持する
 let lastQuery = "";
+// IndexedDB の投稿コレクションで Fuse を初期化
 async function initFuse() {
   try {
     const posts = await loadStreamPostsFromDb();
@@ -753,8 +764,7 @@ function collectTopMatches(query) {
   }
 
   // limit オプションを付けると Fuse 側で件数を絞り込んでくれるよ
-  const results = fuse.search(safeQuery, { limit: SUGGESTION_LIMIT });
-  return results.map((entry) => entry.item);
+  return fuse.search(safeQuery, { limit: SUGGESTION_LIMIT });
 }
 
 //ユーザーからの入力をfuseのsearchにかけている。返り値は{item,score,refindex,...}
@@ -763,8 +773,79 @@ function onSerchInput(event) {
   lastQuery = query;
   renderSuggestions(collectTopMatches(query));
 }
+// Fuse の matches から指定キーのハイライト範囲を抽出
+function extractMatchRanges(matches, key, textLength) {
+  if (!Array.isArray(matches) || !key || !textLength) {
+    return [];
+  }
+
+  // startとendが逆転しないように
+  const ranges = [];
+  matches.forEach((match) => {
+    if (!match || match.key !== key) return;
+    if (!Array.isArray(match.indices)) return;
+    match.indices.forEach((pair) => {
+      if (!Array.isArray(pair) || pair.length < 2) return;
+      const start = Math.max(0, Math.min(textLength - 1, pair[0]));
+      const end = Math.max(start, Math.min(textLength - 1, pair[1]));
+      ranges.push([start, end]);
+    });
+  });
+
+  if (!ranges.length) return [];
+
+  ranges.sort((a, b) => a[0] - b[0]); //startの値を比べて早い順
+  const merged = [];
+  for (const [start, end] of ranges) {
+    const last = merged[merged.length - 1];
+    if (last && start <= last[1] + 1) {
+      if (end > last[1]) {
+        last[1] = end;
+      }
+      continue;
+    }
+    merged.push([start, end]);
+  }
+
+  return merged;
+}
+
+// 抽出した範囲に <span> を差し込んでハイライト
+function renderHighlightedText(element, value, matches, key) {
+  const text = value == null ? "" : String(value);
+  element.textContent = "";
+  if (!text) {
+    return;
+  }
+
+  const ranges = extractMatchRanges(matches, key, text.length);
+  if (!ranges.length) {
+    element.textContent = text;
+    return;
+  }
+
+  let cursor = 0;
+  const fragment = document.createDocumentFragment();
+  for (const [start, end] of ranges) {
+    if (cursor < start) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor, start)));
+    }
+    const span = document.createElement("span");
+    span.classList.add("match-highlight");
+    span.textContent = text.slice(start, end + 1);
+    fragment.appendChild(span);
+    cursor = end + 1;
+  }
+
+  if (cursor < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  element.appendChild(fragment);
+}
+
 //　ヒットしたfuseのうちitemをliに入れる。fragmentで一括で入れている。。
-function renderSuggestions(items) {
+function renderSuggestions(results) {
   const container = document.querySelector(".gcx-suggestions");
   if (!container) return;
   const list = ensureSuggestionsStructure(container);
@@ -772,13 +853,15 @@ function renderSuggestions(items) {
 
   list.replaceChildren();
 
-  if (!items.length) {
+  if (!results.length) {
     container.classList.remove("has-results"); //非表示や余白調整
     return;
   }
 
   const fragment = document.createDocumentFragment();
-  for (const item of items) {
+  for (const entry of results) {
+    const item = entry?.item || {};
+    const matches = entry?.matches || [];
     const li = document.createElement("li");
     li.classList.add("suggestion-item");
     li.tabIndex = 0; // 初心者向けメモ: tabIndex を付けるとフォーカス移動できる
@@ -788,16 +871,27 @@ function renderSuggestions(items) {
 
     const teacher = document.createElement("span");
     teacher.classList.add("suggestion-teacher");
-    teacher.textContent = item.teacherName || "(不明)";
+    renderHighlightedText(
+      teacher,
+      item.teacherName || "(不明)",
+      matches,
+      "teacherName"
+    );
 
     const time = document.createElement("time");
     time.classList.add("suggestion-time");
-    time.textContent = item.postedAt?.text || "";
+    time.dateTime = item.postedAt?.datetime || "";
+    renderHighlightedText(
+      time,
+      item.postedAt?.text || "",
+      matches,
+      "postedAt.text"
+    );
     header.append(teacher, time);
 
     const body = document.createElement("div");
     body.classList.add("suggestion-body");
-    body.textContent = item.body || "";
+    renderHighlightedText(body, item.body || "", matches, "body");
 
     li.append(header, body);
     fragment.appendChild(li);
@@ -815,6 +909,7 @@ function rerunLastQuery() {
   renderSuggestions(collectTopMatches(lastQuery));
 }
 
+// コンテンツスクリプト全体の初期化ルーチン
 async function init() {
   ensureTopbar();
   await loadLocalLibs();
