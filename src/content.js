@@ -105,6 +105,7 @@ async function listAllCourses() {
     if (data?.courses?.length) courses.push(...data.courses);
     pageToken = data?.nextPageToken || undefined;
   } while (pageToken);
+
   return courses;
 }
 //　すべてのストリーム投稿を取得し返す
@@ -123,6 +124,7 @@ async function listAnnouncementsForCourse(courseId) {
 }
 //　取得したものを整形している。返り値はオブジェ
 function mapAnnouncementToPost(ann, course, index) {
+  const apiId = normalizeWhitespace(ann.id || "");
   const id = normalizeStreamId(ann.id || "");
   const teacherName = normalizeWhitespace(course?.name || "");
   const courseId = normalizeWhitespace(course?.id || "");
@@ -136,6 +138,7 @@ function mapAnnouncementToPost(ann, course, index) {
 
   return {
     index,
+    apiId,
     streamId:
       id ||
       ensureStableStreamId(
@@ -436,7 +439,12 @@ async function persistStreamData(posts = []) {
           console.warn("[GCX] skip store: missing fallback streamId", post);
           return;
         }
-        const record = { ...post, streamId, savedAt };
+        const record = {
+          ...post,
+          apiId: normalizeWhitespace(post?.apiId || ""),
+          streamId,
+          savedAt,
+        };
         store.put(record);
         stored.push(record);
       });
@@ -479,6 +487,7 @@ async function loadStreamPostsFromDb() {
         const raw = getAll.result || [];
         const normalized = raw.map((post, index) => {
           const streamId = ensureStableStreamId(post, index + 1);
+          const apiId = normalizeWhitespace(post?.apiId || post?.apiid || "");
           const postedAtSource =
             post?.postedAt?.datetime ||
             post?.postedAt?.text ||
@@ -488,6 +497,7 @@ async function loadStreamPostsFromDb() {
           return {
             ...post,
             streamId,
+            apiId,
             postedAt: {
               text:
                 formattedPostedAt.text ||
@@ -1065,46 +1075,50 @@ function highlightStreamElement(element) {
     element.classList.remove("gcx-stream-highlight");
   }, 2000);
 }
-
-function handleSuggestionActivation(item) {
+//itemという投稿要素からidやリンクを得て遷移する関数に渡している
+async function handleSuggestionActivation(item) {
   if (!item) return;
-  const streamId = normalizeStreamId(item.streamId);
   const courseId = normalizeWhitespace(item.courseId || "");
   const alternateLink = normalizeWhitespace(item.alternateLink || "");
-  const currentCourseId = getCurrentCourseId();
+  const apiId = normalizeWhitespace(item.apiId || item.apiid || "");
 
-  // 異なるコースの投稿なら直接リンクへ遷移
-  if (courseId && currentCourseId && courseId !== currentCourseId) {
-    if (alternateLink) {
-      window.location.assign(alternateLink);
-      return;
+  const navigateTo = (link) => {
+    const href = normalizeWhitespace(link || "");
+    if (!href) {
+      return false;
     }
-  }
+    window.location.assign(href);
+    return true;
+  };
 
-  if (streamId) {
-    const target = findStreamElementByStreamId(streamId);
-    if (target) {
-      highlightStreamElement(target);
-      return;
-    }
-  }
-
-  if (alternateLink) {
-    window.location.assign(alternateLink);
+  if (navigateTo(alternateLink)) {
     return;
   }
 
-  if (courseId) {
+  if (apiId && courseId) {
     try {
-      const origin = window.location?.origin || "https://classroom.google.com";
-      window.location.assign(`${origin}/c/${courseId}`);
-      return;
-    } catch (_error) {
-      // no-op
+      const data = await bgFetch({
+        path: `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(apiId)}`,
+      });
+      const fetchedLink = normalizeWhitespace(data?.alternateLink || "");
+      if (navigateTo(fetchedLink)) {
+        return;
+      }
+    } catch (error) {
+      console.warn("[GCX] Failed to resolve alternateLink via API", {
+        courseId,
+        apiId,
+        error,
+      });
     }
   }
 
-  console.warn("[GCX] No navigation target for suggestion", item);
+  console.error("[GCX] No navigation target resolved via API", {
+    courseId,
+    apiId,
+    alternateLink,
+    item,
+  });
 }
 
 //　ヒットしたfuseのうちitemをliに入れる。fragmentで一括で入れている。。
@@ -1169,7 +1183,9 @@ function renderSuggestions(results) {
     renderHighlightedText(body, item.body || "", matches, "body");
 
     li.append(header, body);
-    const activate = () => handleSuggestionActivation(item);
+    const activate = () => {
+      void handleSuggestionActivation(item);
+    };
     li.addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
