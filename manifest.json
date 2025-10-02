@@ -22,6 +22,7 @@
       "resources": [
         "src/gcx-topbar.css",
         "src/libs/icon.svg/検索用の虫眼鏡アイコン素材.svg",
+        "src/libs/icon.svg/リロードのフリーアイコン.svg",
         "src/libs/fuse.esm.js"
       ],
       "matches": ["https://classroom.google.com/*"]

@@ -17,6 +17,20 @@ const ICON_PATH_DATA = [
   "M499.516,439.154L386.275,326.13c-16.119,23.552-36.771,44.202-60.309,60.345l113.241,113.024c8.329,8.334,19.246,12.501,30.148,12.501c10.916,0,21.833-4.167,30.162-12.501C516.161,482.83,516.161,455.822,499.516,439.154z",
 ];
 
+// リロードアイコンのパスデータ（512x512 ビューボックス）
+const RELOAD_ICON_PATH_DATA =
+  "M446.025,92.206c-40.762-42.394-97.487-69.642-160.383-72.182c-15.791-0.638-29.114,11.648-29.752,27.433c-0.638,15.791,11.648,29.114,27.426,29.76c47.715,1.943,90.45,22.481,121.479,54.681c30.987,32.235,49.956,75.765,49.971,124.011c-0.015,49.481-19.977,94.011-52.383,126.474c-32.462,32.413-76.999,52.368-126.472,52.382c-49.474-0.015-94.025-19.97-126.474-52.382c-32.405-32.463-52.368-76.992-52.382-126.474c0-3.483,0.106-6.938,0.302-10.364l34.091,16.827c3.702,1.824,8.002,1.852,11.35,0.086c3.362-1.788,5.349-5.137,5.264-8.896l-3.362-149.834c-0.114-4.285-2.88-8.357-7.094-10.464c-4.242-2.071-9.166-1.809-12.613,0.738L4.008,182.45c-3.05,2.221-4.498,5.831-3.86,9.577c0.61,3.759,3.249,7.143,6.966,8.974l35.722,17.629c-1.937,12.166-3.018,24.602-3.018,37.279c-0.014,65.102,26.475,124.31,69.153,166.944C151.607,465.525,210.8,492.013,275.91,492c65.095,0.014,124.302-26.475,166.937-69.146c42.678-42.635,69.167-101.842,69.154-166.944C512.014,192.446,486.844,134.565,446.025,92.206z";
+
+const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 // UI やストレージによる切替は廃止し、
 // コード内の定数で API モードを固定します。
 const API_MODE = true; // true: API から同期する / false: 同期しない
@@ -111,9 +125,10 @@ async function listAnnouncementsForCourse(courseId) {
 function mapAnnouncementToPost(ann, course, index) {
   const id = normalizeStreamId(ann.id || "");
   const teacherName = normalizeWhitespace(course?.name || "");
-  const postedAtText = normalizeWhitespace(
+  const postedAtRaw = normalizeWhitespace(
     ann.updateTime || ann.creationTime || ""
   );
+  const formattedPostedAt = formatPostedAtForJapan(postedAtRaw);
   const bodyText = normalizeWhitespace(ann.text || "");
 
   return {
@@ -124,13 +139,18 @@ function mapAnnouncementToPost(ann, course, index) {
         {
           streamId: id,
           teacherName,
-          postedAt: { text: postedAtText },
+          postedAt: {
+            text: formattedPostedAt.text || postedAtRaw,
+          },
           body: bodyText,
         },
         index
       ),
     teacherName,
-    postedAt: { text: postedAtText, datetime: postedAtText },
+    postedAt: {
+      text: formattedPostedAt.text || postedAtRaw,
+      datetime: formattedPostedAt.datetime || postedAtRaw,
+    },
     body: bodyText,
     attachments: normalizeAttachments(ann.materials || []),
   };
@@ -224,6 +244,34 @@ function normalizeWhitespace(value) {
   return String(value)
     .replace(/[\s\u00A0]+/g, " ")
     .trim();
+}
+
+function formatPostedAtForJapan(rawValue) {
+  const value = normalizeWhitespace(rawValue || "");
+  if (!value) {
+    return { text: "", datetime: "" };
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return { text: value, datetime: value };
+  }
+
+  const parts = JAPAN_TIME_FORMATTER.formatToParts(date);
+  const partValue = (type) => parts.find((p) => p.type === type)?.value || "";
+  const yearPart = partValue("year");
+  const monthPart = partValue("month");
+  const dayPart = partValue("day");
+  const baseText = `${monthPart}/${dayPart}`.trim();
+  const yearNumber = Number.parseInt(yearPart, 10);
+  const includeYear = Number.isFinite(yearNumber) && yearNumber < 2025;
+
+  return {
+    text:
+      (includeYear && baseText ? `${yearPart}/${baseText}` : baseText) ||
+      JAPAN_TIMEko_FORMATTER.format(date),
+    datetime: date.toISOString(), // machine friendly ISO 8601
+  };
 }
 //extractStreamDataからindex streamId + elementを返す（配列 > オブジェ。）
 // Classroom 側の DOM 変更に負けないよう、確実に投稿本体を拾うためのセレクタ
@@ -636,14 +684,36 @@ function ensureSVG() {
 
   return svg;
 }
+
+// リロードアイコン（円矢印）を生成
+function ensureReloadSVG() {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.classList.add("icon-svg");
+  svg.setAttribute("viewBox", "0 0 512 512");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS(SVG_NS, "path");
+  path.setAttribute("d", RELOAD_ICON_PATH_DATA);
+  path.setAttribute("fill", "currentColor");
+  svg.appendChild(path);
+  return svg;
+}
 // containerにulがなかったらulをcontainerにappend
 function ensureSuggestionsStructure(container) {
   if (!container) return null;
-  let list = container.querySelector("ul");
+  let wrap = container.querySelector(".suggestions-wrap");
+  if (!wrap) {
+    wrap = document.createElement("div");
+    wrap.classList.add("suggestions-wrap");
+    container.appendChild(wrap);
+  }
+  let list = wrap.querySelector("ul");
   if (!list) {
     list = document.createElement("ul");
     list.classList.add("suggestions-ul");
-    container.appendChild(list);
+    wrap.appendChild(list);
   }
   return list;
 }
@@ -711,8 +781,10 @@ function createTopbar() {
   const refreshBtn = document.createElement("button");
   refreshBtn.type = "button";
   refreshBtn.classList.add("gcx-refresh-btn");
-  refreshBtn.textContent = "更新";
   refreshBtn.title = "新規投稿を同期";
+  refreshBtn.setAttribute("aria-label", "更新");
+  // SVG アイコン（リロード）をインライン生成して先頭に挿入
+  refreshBtn.prepend(ensureReloadSVG());
   [
     "click",
     "mousedown",
@@ -727,14 +799,13 @@ function createTopbar() {
 
   refreshBtn.addEventListener("click", async () => {
     try {
-      const prev = refreshBtn.textContent;
-      refreshBtn.disabled = true;
-      refreshBtn.textContent = "更新中…";
+      refreshBtn.disabled = true; // 連打防止
+      refreshBtn.classList.add("is-spinning");
       await syncStreamPosts();
-      refreshBtn.textContent = prev;
     } catch (err) {
       console.warn("[GCX] manual sync failed", err);
     } finally {
+      refreshBtn.classList.remove("is-spinning");
       refreshBtn.disabled = false;
     }
   });
