@@ -125,11 +125,14 @@ async function listAnnouncementsForCourse(courseId) {
 function mapAnnouncementToPost(ann, course, index) {
   const id = normalizeStreamId(ann.id || "");
   const teacherName = normalizeWhitespace(course?.name || "");
+  const courseId = normalizeWhitespace(course?.id || "");
+  const courseName = teacherName;
   const postedAtRaw = normalizeWhitespace(
     ann.updateTime || ann.creationTime || ""
   );
   const formattedPostedAt = formatPostedAtForJapan(postedAtRaw);
   const bodyText = normalizeWhitespace(ann.text || "");
+  const alternateLink = normalizeWhitespace(ann.alternateLink || "");
 
   return {
     index,
@@ -146,12 +149,15 @@ function mapAnnouncementToPost(ann, course, index) {
         },
         index
       ),
+    courseId,
+    courseName,
     teacherName,
     postedAt: {
       text: formattedPostedAt.text || postedAtRaw,
       datetime: formattedPostedAt.datetime || postedAtRaw,
     },
     body: bodyText,
+    alternateLink,
     attachments: normalizeAttachments(ann.materials || []),
   };
 }
@@ -262,14 +268,13 @@ function formatPostedAtForJapan(rawValue) {
   const yearPart = partValue("year");
   const monthPart = partValue("month");
   const dayPart = partValue("day");
-  const baseText = `${monthPart}/${dayPart}`.trim();
+  const baseText = monthPart && dayPart ? `${monthPart}/${dayPart}` : monthPart || dayPart;
   const yearNumber = Number.parseInt(yearPart, 10);
-  const includeYear = Number.isFinite(yearNumber) && yearNumber < 2025;
+  const includeYear = Number.isFinite(yearNumber) && yearNumber < 2024;
+  const fallbackText = JAPAN_TIME_FORMATTER.format(date);
 
   return {
-    text:
-      (includeYear && baseText ? `${yearPart}/${baseText}` : baseText) ||
-      JAPAN_TIMEko_FORMATTER.format(date),
+    text: includeYear && baseText ? `${yearPart}/${baseText}` : baseText || fallbackText,
     datetime: date.toISOString(), // machine friendly ISO 8601
   };
 }
@@ -471,7 +476,32 @@ async function loadStreamPostsFromDb() {
       const getAll = store.getAll();
 
       getAll.onsuccess = () => {
-        resolve(getAll.result || []);
+        const raw = getAll.result || [];
+        const normalized = raw.map((post, index) => {
+          const streamId = ensureStableStreamId(post, index + 1);
+          const postedAtSource =
+            post?.postedAt?.datetime ||
+            post?.postedAt?.text ||
+            post?.postedAt ||
+            "";
+          const formattedPostedAt = formatPostedAtForJapan(postedAtSource);
+          return {
+            ...post,
+            streamId,
+            postedAt: {
+              text:
+                formattedPostedAt.text ||
+                normalizeWhitespace(post?.postedAt?.text || ""),
+              datetime:
+                formattedPostedAt.datetime ||
+                normalizeWhitespace(post?.postedAt?.datetime || ""),
+            },
+            alternateLink: normalizeWhitespace(post?.alternateLink || ""),
+            courseId: normalizeWhitespace(post?.courseId || ""),
+            courseName: normalizeWhitespace(post?.courseName || post?.teacherName || ""),
+          };
+        });
+        resolve(normalized);
         db.close();
       };
       getAll.onerror = () => {
@@ -863,6 +893,7 @@ const options = {
   threshold: 0.3,
   keys: [
     { name: "teacherName", weight: 0.4 },
+    { name: "courseName", weight: 0.2 },
     { name: "body", weight: 0.4 },
     { name: "attachments.title", weight: 0.2 },
     { name: "postedAt.text", weight: 0.05 },
@@ -979,6 +1010,103 @@ function renderHighlightedText(element, value, matches, key) {
   element.appendChild(fragment);
 }
 
+function getCurrentCourseId() {
+  const pathname = window.location?.pathname || "";
+  const hash = window.location?.hash || "";
+  const match = /\/c\/([a-zA-Z0-9_-]+)/.exec(pathname) ||
+    /\/c\/([a-zA-Z0-9_-]+)/.exec(hash);
+  return match?.[1] || "";
+}
+
+function cssEscapeSafe(value) {
+  if (!value) return "";
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function findStreamElementByStreamId(streamId) {
+  const safeId = cssEscapeSafe(streamId);
+  if (!safeId) return null;
+  const selectors = [
+    `[data-stream-item-id="${safeId}"]`,
+    `[data-item-id="${safeId}"]`,
+    `#${safeId}`,
+  ];
+  for (const selector of selectors) {
+    try {
+      const node = document.querySelector(selector);
+      if (!node) continue;
+      const container = node.closest(
+        'c-wiz[jsmodel*="N2jS6b"], article[jsmodel*="N2jS6b"], li[jsmodel*="N2jS6b"], c-wiz[role="listitem"], article[role="listitem"], li[role="listitem"]'
+      );
+      return container || node;
+    } catch (error) {
+      // CSS セレクタが不正の場合は次へ
+    }
+  }
+  return null;
+}
+
+function highlightStreamElement(element) {
+  if (!element) return;
+  element.scrollIntoView({ behavior: "smooth", block: "center" });
+  element.classList.add("gcx-stream-highlight");
+  // focus を与えてアクセシビリティも確保（失敗しても問題なし）
+  try {
+    if (typeof element.focus === "function") {
+      element.focus({ preventScroll: true });
+    }
+  } catch (_err) {
+    // no-op
+  }
+  setTimeout(() => {
+    element.classList.remove("gcx-stream-highlight");
+  }, 2000);
+}
+
+function handleSuggestionActivation(item) {
+  if (!item) return;
+  const streamId = normalizeStreamId(item.streamId);
+  const courseId = normalizeWhitespace(item.courseId || "");
+  const alternateLink = normalizeWhitespace(item.alternateLink || "");
+  const currentCourseId = getCurrentCourseId();
+
+  // 異なるコースの投稿なら直接リンクへ遷移
+  if (courseId && currentCourseId && courseId !== currentCourseId) {
+    if (alternateLink) {
+      window.location.assign(alternateLink);
+      return;
+    }
+  }
+
+  if (streamId) {
+    const target = findStreamElementByStreamId(streamId);
+    if (target) {
+      highlightStreamElement(target);
+      return;
+    }
+  }
+
+  if (alternateLink) {
+    window.location.assign(alternateLink);
+    return;
+  }
+
+  if (courseId) {
+    try {
+      const origin = window.location?.origin || "https://classroom.google.com";
+      window.location.assign(`${origin}/c/${courseId}`);
+      return;
+    } catch (_error) {
+      // no-op
+    }
+  }
+
+  console.warn("[GCX] No navigation target for suggestion", item);
+}
+
 //　ヒットしたfuseのうちitemをliに入れる。fragmentで一括で入れている。。
 function renderSuggestions(results) {
   const container = document.querySelector(".gcx-suggestions");
@@ -1000,6 +1128,18 @@ function renderSuggestions(results) {
     const li = document.createElement("li");
     li.classList.add("suggestion-item");
     li.tabIndex = 0; // 初心者向けメモ: tabIndex を付けるとフォーカス移動できる
+    li.setAttribute("role", "button");
+    li.dataset.streamId = item.streamId || "";
+    li.dataset.courseId = item.courseId || "";
+    li.dataset.alternateLink = item.alternateLink || "";
+    const ariaLabelParts = [
+      item.teacherName || "",
+      item.courseName && item.courseName !== item.teacherName ? item.courseName : "",
+      item.postedAt?.text || "",
+    ].filter(Boolean);
+    if (ariaLabelParts.length) {
+      li.setAttribute("aria-label", ariaLabelParts.join(" "));
+    }
 
     const header = document.createElement("div");
     header.classList.add("suggestion-header");
@@ -1029,6 +1169,18 @@ function renderSuggestions(results) {
     renderHighlightedText(body, item.body || "", matches, "body");
 
     li.append(header, body);
+    const activate = () => handleSuggestionActivation(item);
+    li.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      activate();
+    });
+    li.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+        event.preventDefault();
+        activate();
+      }
+    });
     fragment.appendChild(li);
   }
 

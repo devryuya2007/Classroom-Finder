@@ -139,6 +139,25 @@
   }
 }
 
+.gcx-stream-highlight {
+  outline: 3px solid rgba(26, 115, 232, 0.65);
+  outline-offset: 2px;
+  border-radius: 16px;
+  animation: gcx-stream-highlight 1.4s ease-out 1;
+}
+
+@keyframes gcx-stream-highlight {
+  0% {
+    box-shadow: 0 0 0 rgba(26, 115, 232, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 16px rgba(26, 115, 232, 0.45);
+  }
+  100% {
+    box-shadow: 0 0 0 rgba(26, 115, 232, 0);
+  }
+}
+
 .gcx-topbar.is-expanded {
   transform: translate(0px -2px);
   box-shadow: rgb(120, 117, 117) 0 2px 4px 0;
@@ -151,6 +170,7 @@
   box-sizing: border-box;
 }
 
+/* ul要素 */
 .gcx-topbar .suggestions-wrap .suggestions-ul {
   margin: 0;
   padding: 0;
@@ -160,18 +180,19 @@
   gap: 10px;
 }
 
+/* li要素 */
 .gcx-topbar .suggestion-item {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: 0px;
   background: linear-gradient(135deg, #ffffff 0%, #f7f9ff 100%);
   border: 1px solid rgba(26, 115, 232, 0.12);
   border-left-width: 3px;
   border-left-color: #1a73e8;
   box-shadow: 0 4px 14px rgba(20, 31, 56, 0.08);
-  transition: transform 0.15s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
 }
 
 .gcx-topbar .suggestion-item:hover,
