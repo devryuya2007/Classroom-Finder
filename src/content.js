@@ -271,13 +271,17 @@ function formatPostedAtForJapan(rawValue) {
   const yearPart = partValue("year");
   const monthPart = partValue("month");
   const dayPart = partValue("day");
-  const baseText = monthPart && dayPart ? `${monthPart}/${dayPart}` : monthPart || dayPart;
+  const baseText =
+    monthPart && dayPart ? `${monthPart}/${dayPart}` : monthPart || dayPart;
   const yearNumber = Number.parseInt(yearPart, 10);
   const includeYear = Number.isFinite(yearNumber) && yearNumber < 2024;
   const fallbackText = JAPAN_TIME_FORMATTER.format(date);
 
   return {
-    text: includeYear && baseText ? `${yearPart}/${baseText}` : baseText || fallbackText,
+    text:
+      includeYear && baseText
+        ? `${yearPart}/${baseText}`
+        : baseText || fallbackText,
     datetime: date.toISOString(), // machine friendly ISO 8601
   };
 }
@@ -508,7 +512,9 @@ async function loadStreamPostsFromDb() {
             },
             alternateLink: normalizeWhitespace(post?.alternateLink || ""),
             courseId: normalizeWhitespace(post?.courseId || ""),
-            courseName: normalizeWhitespace(post?.courseName || post?.teacherName || ""),
+            courseName: normalizeWhitespace(
+              post?.courseName || post?.teacherName || ""
+            ),
           };
         });
         resolve(normalized);
@@ -689,6 +695,18 @@ class TopbarFocusController {
     this.wrap.classList.add(EXPANDED_CLASS);
   }
 
+  close() {
+    this.wrap.classList.remove(EXPANDED_CLASS);
+    const container = this.wrap.querySelector(".gcx-suggestions");
+    if (container) {
+      container.classList.remove("has-results");
+      const list = container.querySelector(".suggestions-ul");
+      if (list) {
+        list.replaceChildren();
+      }
+    }
+  }
+
   // focusout 時に「次のフォーカス先」がトップバー外なら閉じる
   handleFocusOut(event) {
     const nextTarget = event.relatedTarget;
@@ -701,7 +719,7 @@ class TopbarFocusController {
       return; // activeElement が内側なら引き続き開いたまま
     }
 
-    this.wrap.classList.remove(EXPANDED_CLASS);
+    this.close();
   }
 }
 
@@ -802,6 +820,11 @@ function createTopbar() {
   const focusController = new TopbarFocusController(wrap);
   input.addEventListener("focus", () => {
     focusController.open();
+
+    const value = input.value.trim();
+    if (value) {
+      renderSuggestions(collectTopMatches(value));
+    }
   });
   wrap.addEventListener(
     "focusout",
@@ -811,6 +834,16 @@ function createTopbar() {
     true
   );
   input.addEventListener("input", onSerchInput);
+
+  const handleOutsidePointerDown = (event) => {
+    if (!wrap.contains(event.target)) {
+      focusController.close();
+      if (document.activeElement === input) {
+        input.blur();
+      }
+    }
+  };
+  document.addEventListener("pointerdown", handleOutsidePointerDown, true); // キャプチャリングフェーズ
 
   field.appendChild(icon);
   field.appendChild(input);
@@ -1023,7 +1056,8 @@ function renderHighlightedText(element, value, matches, key) {
 function getCurrentCourseId() {
   const pathname = window.location?.pathname || "";
   const hash = window.location?.hash || "";
-  const match = /\/c\/([a-zA-Z0-9_-]+)/.exec(pathname) ||
+  const match =
+    /\/c\/([a-zA-Z0-9_-]+)/.exec(pathname) ||
     /\/c\/([a-zA-Z0-9_-]+)/.exec(hash);
   return match?.[1] || "";
 }
@@ -1098,7 +1132,9 @@ async function handleSuggestionActivation(item) {
   if (apiId && courseId) {
     try {
       const data = await bgFetch({
-        path: `/courses/${encodeURIComponent(courseId)}/announcements/${encodeURIComponent(apiId)}`,
+        path: `/courses/${encodeURIComponent(
+          courseId
+        )}/announcements/${encodeURIComponent(apiId)}`,
       });
       const fetchedLink = normalizeWhitespace(data?.alternateLink || "");
       if (navigateTo(fetchedLink)) {
@@ -1148,7 +1184,9 @@ function renderSuggestions(results) {
     li.dataset.alternateLink = item.alternateLink || "";
     const ariaLabelParts = [
       item.teacherName || "",
-      item.courseName && item.courseName !== item.teacherName ? item.courseName : "",
+      item.courseName && item.courseName !== item.teacherName
+        ? item.courseName
+        : "",
       item.postedAt?.text || "",
     ].filter(Boolean);
     if (ariaLabelParts.length) {
@@ -1192,7 +1230,11 @@ function renderSuggestions(results) {
       activate();
     });
     li.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+      if (
+        event.key === "Enter" ||
+        event.key === " " ||
+        event.key === "Spacebar"
+      ) {
         event.preventDefault();
         activate();
       }
