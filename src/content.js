@@ -34,6 +34,16 @@ const PLACEHOLDER_SYNC_ERROR = "同期に失敗しました";
 const PLACEHOLDER_LOGIN_REQUIRED = "Googleアカウントにログインしてください。";
 const PLACEHOLDER_RELOAD_REQUIRED = "ページをリロードしてください。";
 
+const RELOAD_ERROR_KEYWORDS = ["no response from background"];
+const LOGIN_ERROR_KEYWORDS = [
+  "getauthtoken",
+  "oauth",
+  "no token",
+  "not authorized",
+  "authorization",
+  "http 401",
+];
+
 const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
   year: "numeric",
@@ -270,10 +280,12 @@ function normalizeWhitespace(value) {
     .trim();
 }
 
+// 配列ならそのまま返し、そうでなければ空配列に変換
 function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+// 検索入力欄のプレースホルダー文言とエラースタイルを切り替え
 function setTopbarPlaceholder(text) {
   if (!topbarInput) {
     topbarInput = document.querySelector(`.${TOPBAR_INPUT}`);
@@ -288,32 +300,27 @@ function setTopbarPlaceholder(text) {
   }
 }
 
+// 手動更新ボタンの DOM 要素を取得
 function getRefreshButton() {
   return document.querySelector(REFRESH_BUTTON_SELECTOR);
 }
 
+// エラー原因に応じて更新ボタン付近のプレースホルダー文言を出し分ける
 function resolveRefreshErrorPlaceholder(error) {
   if (!error) {
     return PLACEHOLDER_SYNC_ERROR;
   }
-  const message = String(error?.message || error || "");
-  const lower = message.toLowerCase();
-  if (lower.includes("no response from background")) {
+  const message = String(error?.message || error || "").toLowerCase();
+  if (RELOAD_ERROR_KEYWORDS.some((keyword) => message.includes(keyword))) {
     return PLACEHOLDER_RELOAD_REQUIRED;
   }
-  if (
-    lower.includes("getauthtoken") ||
-    lower.includes("oauth") ||
-    lower.includes("no token") ||
-    lower.includes("not authorized") ||
-    lower.includes("authorization") ||
-    lower.includes("http 401")
-  ) {
+  if (LOGIN_ERROR_KEYWORDS.some((keyword) => message.includes(keyword))) {
     return PLACEHOLDER_LOGIN_REQUIRED;
   }
   return PLACEHOLDER_SYNC_ERROR;
 }
 
+// エラー表示用スタイルを一定時間適用し、適切なメッセージを示す
 function flashRefreshError(error) {
   const button = getRefreshButton();
   if (!button) return;
@@ -329,6 +336,7 @@ function flashRefreshError(error) {
   }, REFRESH_ERROR_DURATION_MS);
 }
 
+// 投稿日時を日本語表記に整形し、ISO 文字列も同時に提供
 function formatPostedAtForJapan(rawValue) {
   const value = normalizeWhitespace(rawValue || "");
   if (!value) {
@@ -1167,7 +1175,7 @@ async function initFuse() {
   }
 }
 
-// 実際に Fuse.js へ問い合わせて「何件返すか」を決める係の小さな関数
+// Fuse.js の検索結果から本文マッチの開始位置を取得（なければ Infinity）
 function getBodyMatchStart(result) {
   const matches = toArray(result?.matches);
   for (const match of matches) {
@@ -1180,6 +1188,7 @@ function getBodyMatchStart(result) {
   return Number.POSITIVE_INFINITY;
 }
 
+// Fuse.js で検索し、本文ヒットが早い順に並べ替えた候補を返す
 function collectTopMatches(query) {
   // 入力が空文字だったり、まだ Fuse の準備が出来ていない場合は即終了
   if (!query || !fuse) {
@@ -1192,16 +1201,14 @@ function collectTopMatches(query) {
   }
 
   const results = fuse.search(safeQuery);
-  const sorted = results
-    .slice()
-    .sort((a, b) => {
-      const aBodyIndex = getBodyMatchStart(a);
-      const bBodyIndex = getBodyMatchStart(b);
-      if (aBodyIndex !== bBodyIndex) {
-        return aBodyIndex - bBodyIndex;
-      }
-      return (a?.score ?? 1) - (b?.score ?? 1);
-    });
+  const sorted = results.slice().sort((a, b) => {
+    const aBodyIndex = getBodyMatchStart(a);
+    const bBodyIndex = getBodyMatchStart(b);
+    if (aBodyIndex !== bBodyIndex) {
+      return aBodyIndex - bBodyIndex;
+    }
+    return (a?.score ?? 1) - (b?.score ?? 1);
+  });
 
   return sorted.slice(0, SUGGESTION_LIMIT);
 }
@@ -1453,7 +1460,18 @@ async function handleSuggestionActivation(item) {
     if (!href) {
       return false;
     }
-    window.location.assign(href);
+    let url;
+    try {
+      url = new URL(href, window.location.href);
+    } catch (err) {
+      console.warn("[GCX] Invalid navigation target", { href, err });
+      return false;
+    }
+    if (url.protocol !== "https:") {
+      console.warn("[GCX] Blocked non-https navigation", { href });
+      return false;
+    }
+    window.location.assign(url.toString());
     return true;
   };
 

@@ -55,10 +55,6 @@
   display: none;
 }
 
-.gcx-topbar .gcx-topbar-input::placeholder {
-  color: #5f6368;
-}
-
 .gcx-topbar > .svg-input-wrap:focus-within {
   border-color: transparent;
   background: #fff;
@@ -183,7 +179,7 @@
 }
 
 .gcx-topbar.is-expanded {
-  transform: translate(0px -2px);
+  /* transform: translate(0px, -2px); */
   box-shadow: rgb(120, 117, 117) 0 2px 4px 0;
 }
 
