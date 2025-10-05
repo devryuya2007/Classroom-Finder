@@ -31,6 +31,8 @@ const ERROR_ICON_PATHS = [
 const ERROR_ICON_COLOR = "#EA4335";
 const PLACEHOLDER_DEFAULT = "クラス全体を検索…";
 const PLACEHOLDER_SYNC_ERROR = "同期に失敗しました";
+const PLACEHOLDER_LOGIN_REQUIRED = "Googleアカウントにログインしてください。";
+const PLACEHOLDER_RELOAD_REQUIRED = "ページをリロードしてください。";
 
 const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
@@ -44,7 +46,7 @@ const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
 
 // UI やストレージによる切替は廃止し、
 // コード内の定数で API モードを固定します。
-const API_MODE = false; // true: API から同期する / false: 同期しない
+const API_MODE = true; // true: API から同期する / false: 同期しない
 // 手動更新のみなら 0 にする。自動同期する場合はミリ秒で指定。
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5分（0 で無効）
 
@@ -290,11 +292,33 @@ function getRefreshButton() {
   return document.querySelector(REFRESH_BUTTON_SELECTOR);
 }
 
-function flashRefreshError() {
+function resolveRefreshErrorPlaceholder(error) {
+  if (!error) {
+    return PLACEHOLDER_SYNC_ERROR;
+  }
+  const message = String(error?.message || error || "");
+  const lower = message.toLowerCase();
+  if (lower.includes("no response from background")) {
+    return PLACEHOLDER_RELOAD_REQUIRED;
+  }
+  if (
+    lower.includes("getauthtoken") ||
+    lower.includes("oauth") ||
+    lower.includes("no token") ||
+    lower.includes("not authorized") ||
+    lower.includes("authorization") ||
+    lower.includes("http 401")
+  ) {
+    return PLACEHOLDER_LOGIN_REQUIRED;
+  }
+  return PLACEHOLDER_SYNC_ERROR;
+}
+
+function flashRefreshError(error) {
   const button = getRefreshButton();
   if (!button) return;
   button.classList.add(REFRESH_ERROR_CLASS);
-  setTopbarPlaceholder(PLACEHOLDER_SYNC_ERROR);
+  setTopbarPlaceholder(resolveRefreshErrorPlaceholder(error));
   if (refreshErrorTimerId) {
     clearTimeout(refreshErrorTimerId);
   }
@@ -1055,7 +1079,7 @@ function createTopbar() {
       await syncStreamPosts({ source: "manual" });
     } catch (err) {
       console.warn("[GCX] manual sync failed", err);
-      flashRefreshError();
+      flashRefreshError(err);
     } finally {
       refreshBtn.classList.remove("is-spinning");
       refreshBtn.disabled = false;
@@ -1093,7 +1117,7 @@ function observe() {
       "[GCX] Periodic fetch failed. API mode=false とみなします",
       err
     );
-    flashRefreshError();
+    flashRefreshError(err);
   });
   // 定期的にデータを同期（5 分ごと）
   if (POLL_INTERVAL_MS > 0) {
@@ -1104,7 +1128,7 @@ function observe() {
           "[GCX] Periodic fetch failed. API mode=false とみなします",
           err
         );
-        flashRefreshError();
+        flashRefreshError(err);
       });
     }, POLL_INTERVAL_MS);
   }
@@ -1144,6 +1168,18 @@ async function initFuse() {
 }
 
 // 実際に Fuse.js へ問い合わせて「何件返すか」を決める係の小さな関数
+function getBodyMatchStart(result) {
+  const matches = toArray(result?.matches);
+  for (const match of matches) {
+    if (match?.key !== "body") continue;
+    const firstRange = toArray(match.indices)[0];
+    if (Array.isArray(firstRange) && firstRange.length > 0) {
+      return Number(firstRange[0]);
+    }
+  }
+  return Number.POSITIVE_INFINITY;
+}
+
 function collectTopMatches(query) {
   // 入力が空文字だったり、まだ Fuse の準備が出来ていない場合は即終了
   if (!query || !fuse) {
@@ -1155,8 +1191,19 @@ function collectTopMatches(query) {
     return [];
   }
 
-  // limit オプションを付けると Fuse 側で件数を絞り込んでくれるよ
-  return fuse.search(safeQuery, { limit: SUGGESTION_LIMIT });
+  const results = fuse.search(safeQuery);
+  const sorted = results
+    .slice()
+    .sort((a, b) => {
+      const aBodyIndex = getBodyMatchStart(a);
+      const bBodyIndex = getBodyMatchStart(b);
+      if (aBodyIndex !== bBodyIndex) {
+        return aBodyIndex - bBodyIndex;
+      }
+      return (a?.score ?? 1) - (b?.score ?? 1);
+    });
+
+  return sorted.slice(0, SUGGESTION_LIMIT);
 }
 
 //ユーザーからの入力をfuseのsearchにかけている。返り値は{item,score,refindex,...}
@@ -1588,7 +1635,7 @@ async function init() {
         "[GCX] Initial fetch failed. API mode=false とみなします",
         error
       );
-      flashRefreshError();
+      flashRefreshError(error);
     }
   } else {
     console.info("[GCX] API mode=false (disabled)");
