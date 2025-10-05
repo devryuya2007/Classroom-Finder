@@ -45,6 +45,12 @@
   color: inherit;
   outline: none;
 }
+.gcx-topbar .gcx-topbar-input::placeholder {
+  color: #5f6368;
+}
+.gcx-topbar .gcx-topbar-input.is-error::placeholder {
+  color: #ea4335;
+}
 ::-webkit-search-cancel-button {
   display: none;
 }
@@ -124,27 +130,23 @@
   fill: black;
 }
 .gcx-refresh-btn .error-tag {
-  position: absolute;
-  top: -6px;
-  right: 1px;
   display: none;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  border-radius: 999px;
-  background: transparent;
-  z-index: 4;
+  align-items: center;
+  justify-content: center;
+  width: 12px;
+  height: 12px;
   pointer-events: none;
+}
+.gcx-refresh-btn .error-tag svg {
+  width: 12px;
+  height: 12px;
+  display: block;
+}
+.gcx-refresh-btn.is-error .icon-svg.reload-icon {
+  display: none;
 }
 .gcx-refresh-btn.is-error .error-tag {
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.gcx-refresh-btn .error-tag svg {
-  width: 16px;
-  height: 16px;
-  display: block;
 }
 .gcx-refresh-btn.is-spinning .icon-svg {
   animation: gcx-spin 0.9s linear infinite;

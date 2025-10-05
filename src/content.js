@@ -11,7 +11,7 @@ const TOPBAR_ID = "gcx-topbar-overlay"; // DOM 上の ID（重複防止）
 const EXPANDED_CLASS = "is-expanded";
 const REFRESH_BUTTON_SELECTOR = ".gcx-refresh-btn";
 const REFRESH_ERROR_CLASS = "is-error";
-const REFRESH_ERROR_DURATION_MS = 1000;
+const REFRESH_ERROR_DURATION_MS = 1500;
 const SUGGESTION_LIMIT = 20; // 初心者メモ: Fuse.js の検索結果は 20 件までに抑えておく
 const SVG_NS = "http://www.w3.org/2000/svg";
 const ICON_PATH_DATA = [
@@ -29,6 +29,8 @@ const ERROR_ICON_PATHS = [
   "M12 17.0195V17",
 ];
 const ERROR_ICON_COLOR = "#EA4335";
+const PLACEHOLDER_DEFAULT = "クラス全体を検索…";
+const PLACEHOLDER_SYNC_ERROR = "同期に失敗しました";
 
 const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
   timeZone: "Asia/Tokyo",
@@ -270,6 +272,20 @@ function toArray(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function setTopbarPlaceholder(text) {
+  if (!topbarInput) {
+    topbarInput = document.querySelector(`.${TOPBAR_INPUT}`);
+  }
+  if (topbarInput) {
+    topbarInput.placeholder = text;
+    if (text === PLACEHOLDER_SYNC_ERROR) {
+      topbarInput.classList.add("is-error");
+    } else {
+      topbarInput.classList.remove("is-error");
+    }
+  }
+}
+
 function getRefreshButton() {
   return document.querySelector(REFRESH_BUTTON_SELECTOR);
 }
@@ -278,12 +294,14 @@ function flashRefreshError() {
   const button = getRefreshButton();
   if (!button) return;
   button.classList.add(REFRESH_ERROR_CLASS);
+  setTopbarPlaceholder(PLACEHOLDER_SYNC_ERROR);
   if (refreshErrorTimerId) {
     clearTimeout(refreshErrorTimerId);
   }
   refreshErrorTimerId = window.setTimeout(() => {
     button.classList.remove(REFRESH_ERROR_CLASS);
     refreshErrorTimerId = null;
+    setTopbarPlaceholder(PLACEHOLDER_DEFAULT);
   }, REFRESH_ERROR_DURATION_MS);
 }
 
@@ -729,6 +747,7 @@ async function syncStreamPosts(_options = {}) {
         rerunLastQuery();
       }
     }
+    setTopbarPlaceholder(PLACEHOLDER_DEFAULT);
   } finally {
     syncInFlight = false;
   }
@@ -868,7 +887,7 @@ function ensureSVG() {
 // リロードアイコン（円矢印）を生成
 function ensureReloadSVG() {
   const svg = document.createElementNS(SVG_NS, "svg");
-  svg.classList.add("icon-svg");
+  svg.classList.add("icon-svg", "reload-icon");
   svg.setAttribute("viewBox", "0 0 512 512");
   svg.setAttribute("width", "18");
   svg.setAttribute("height", "18");
@@ -943,11 +962,12 @@ function createTopbar() {
   const input = document.createElement("input");
   input.type = "search";
   input.classList.add(TOPBAR_INPUT);
-  input.placeholder = "クラス全体を検索…";
+  input.placeholder = PLACEHOLDER_DEFAULT;
   input.setAttribute("role", "searchbox");
   input.autocapitalize = "off";
   input.autocomplete = "off";
   input.spellcheck = false;
+  topbarInput = input;
 
   const stop = (e) => e.stopPropagation();
   [
@@ -1110,6 +1130,7 @@ let fuse;
 // IndexedDB からの読み込みが終わるまでの間に入力されたキーワードを保持する
 let lastQuery = "";
 let refreshErrorTimerId = null;
+let topbarInput;
 // API モードのトグル UI / 切替ハンドラは削除
 // IndexedDB の投稿コレクションで Fuse を初期化
 async function initFuse() {
