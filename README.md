@@ -53,6 +53,16 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 - `host_permissions`: `https://classroom.google.com/*`, `https://classroom.googleapis.com/*`, `https://www.googleapis.com/*`
 - `content_scripts`: `run_at: document_idle`
 
+### テスト（ローカル検証）
+
+初心者でも迷わないように、ローカルでテストを回す手順をまとめておくね。
+
+1. **Node.js 20 系をインストール**する。（`node -v` で 20.x が表示されれば OK）
+2. プロジェクトルートで `npm install` を実行し、必要なライブラリを入れる。
+3. `npm test` を実行すると、Node.js の組み込みテストランナーが `tests/` 配下の `.js` を全部回す。
+   - スクリプトの中では `node --test --experimental-test-coverage tests` を呼び出していて、カバレッジ情報も一緒に取得できるようになってるよ。
+4. テストが成功すると、結果とカバレッジ要約がターミナルに表示される。
+
 ---
 
 ## 使い方
