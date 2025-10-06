@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "echo 'Load extension via chrome://extensions (unpacked)'",
     "build": "echo 'No build step required. Optionally add Vite/Rollup.'",
-    "test": "echo 'No tests defined' && exit 0",
+    "test": "node --test --experimental-test-coverage tests",
     "lint": "echo 'ESLint not configured yet' && exit 0"
   },
   "dependencies": {
