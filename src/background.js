@@ -2,6 +2,23 @@
 // Uses chrome.identity.getAuthToken (no client_secret) and proxies API calls.
 
 const CLASSROOM_BASE = 'https://classroom.googleapis.com/v1';
+const ALLOWED_API_HOSTS = new Set(['classroom.googleapis.com']);
+
+function assertAllowedTarget(target) {
+  let url;
+  try {
+    url = new URL(target);
+  } catch (err) {
+    throw new Error(`Invalid URL: ${String(target)}`);
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error('Only HTTPS is allowed');
+  }
+  if (!ALLOWED_API_HOSTS.has(url.hostname)) {
+    throw new Error(`Host not allowed: ${url.hostname}`);
+  }
+  return url.toString();
+}
 
 async function getAuthToken({ interactive = false } = {}) {
   return new Promise((resolve, reject) => {
@@ -66,24 +83,33 @@ async function googleFetch({
   base = CLASSROOM_BASE,
   interactiveOnRetry = true,
 } = {}) {
-  const target = url || buildUrl(base, path || '', params);
+  // Build and validate target URL strictly for Classroom API only
+  const rawTarget = url || buildUrl(base, path || '', params);
+  const target = assertAllowedTarget(rawTarget);
+
+  // Only allow safe HTTP method
+  const methodUpper = String(method || 'GET').toUpperCase();
+  if (methodUpper !== 'GET') {
+    throw new Error(`Method not allowed: ${methodUpper}`);
+  }
 
   // Try silent first, then one interactive retry if unauthorized
   try {
     const token = await getAuthToken({ interactive: false });
     const res = await fetch(target, {
-      method,
+      method: 'GET',
       headers: { ...(headers || {}), Authorization: `Bearer ${token}` },
-      body,
+      // GET: no request body
+      body: undefined,
     });
     if (res.status === 401 || res.status === 403) {
       await removeCachedToken(token);
       if (interactiveOnRetry) {
         const token2 = await getAuthToken({ interactive: true });
         const res2 = await fetch(target, {
-          method,
+          method: 'GET',
           headers: { ...(headers || {}), Authorization: `Bearer ${token2}` },
-          body,
+          body: undefined,
         });
         return res2;
       }
@@ -93,17 +119,19 @@ async function googleFetch({
     // Fallback: interactive fetch once
     const token = await getAuthToken({ interactive: true });
     return fetch(target, {
-      method,
+      method: 'GET',
       headers: { ...(headers || {}), Authorization: `Bearer ${token}` },
-      body,
+      body: undefined,
     });
   }
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     try {
       if (!msg || typeof msg !== 'object') return;
+      // Only accept messages from our own extension
+      if (sender && sender.id && sender.id !== chrome.runtime.id) return;
 
       if (msg.type === 'GCX_GOOGLE_GET_TOKEN') {
         const token = await getAuthToken({ interactive: !!msg.interactive });

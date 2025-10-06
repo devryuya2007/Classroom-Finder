@@ -59,6 +59,7 @@ const JAPAN_TIME_FORMATTER = new Intl.DateTimeFormat("ja-JP", {
 const API_MODE = true; // true: API から同期する / false: 同期しない
 // 手動更新のみなら 0 にする。自動同期する場合はミリ秒で指定。
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5分（0 で無効）
+const ALLOWED_NAV_HOSTS = new Set(["classroom.google.com"]);
 
 // 注意: ensureStyles は CSS を注入するだけ。検索 UI 本体は createTopbar()/injectTopbar() で生成・挿入。
 function ensureStyles() {
@@ -1037,7 +1038,7 @@ function createTopbar() {
     },
     true
   );
-  input.addEventListener("input", onSerchInput);
+  input.addEventListener("input", onSearchInput);
 
   const handleOutsidePointerDown = (event) => {
     if (!wrap.contains(event.target)) {
@@ -1214,7 +1215,7 @@ function collectTopMatches(query) {
 }
 
 //ユーザーからの入力をfuseのsearchにかけている。返り値は{item,score,refindex,...}
-function onSerchInput(event) {
+function onSearchInput(event) {
   const query = event.target.value.trim();
   lastQuery = query;
   renderSuggestions(collectTopMatches(query));
@@ -1402,11 +1403,48 @@ function getCurrentCourseId() {
 }
 
 function cssEscapeSafe(value) {
-  if (!value) return "";
+  if (value == null) return "";
   if (typeof CSS !== "undefined" && typeof CSS.escape === "function") {
     return CSS.escape(value);
   }
-  return String(value).replace(/["\\]/g, "\\$&");
+  const string = String(value);
+  const length = string.length;
+  let result = "";
+  for (let index = 0; index < length; index += 1) {
+    const code = string.charCodeAt(index);
+    const char = string.charAt(index);
+    if (code === 0) {
+      result += "\uFFFD";
+      continue;
+    }
+    if (
+      (code >= 0x0001 && code <= 0x001f) ||
+      code === 0x007f ||
+      (index === 0 && code >= 0x0030 && code <= 0x0039) ||
+      (
+        index === 1 &&
+        string.charCodeAt(0) === 0x002d &&
+        code >= 0x0030 && code <= 0x0039
+      ) ||
+      (index === 0 && code === 0x002d && length === 1)
+    ) {
+      result += "\\" + code.toString(16) + " ";
+      continue;
+    }
+    if (
+      code >= 0x0080 ||
+      code === 0x002d ||
+      code === 0x005f ||
+      (code >= 0x0030 && code <= 0x0039) ||
+      (code >= 0x0041 && code <= 0x005a) ||
+      (code >= 0x0061 && code <= 0x007a)
+    ) {
+      result += char;
+      continue;
+    }
+    result += "\\" + char;
+  }
+  return result;
 }
 
 function findStreamElementByStreamId(streamId) {
@@ -1469,6 +1507,10 @@ async function handleSuggestionActivation(item) {
     }
     if (url.protocol !== "https:") {
       console.warn("[GCX] Blocked non-https navigation", { href });
+      return false;
+    }
+    if (!ALLOWED_NAV_HOSTS.has(url.hostname)) {
+      console.warn("[GCX] Blocked navigation host", { href, host: url.hostname });
       return false;
     }
     window.location.assign(url.toString());
