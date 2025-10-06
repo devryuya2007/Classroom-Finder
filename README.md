@@ -1,6 +1,6 @@
-# Google Classroom Search (DOM-First, API Fallback)
+# Google Classroom Search（API + IndexedDB + Fuse）
 
-Google Classroom（Web）に**高速・高精度の横断検索**を付与する Chrome 拡張機能。まずは **DOM 抽出（端末内完結・審査不要・高速）**で動作し、DOM が崩れた/重い場合は**Classroom API へ安全に切替**できる。
+Google Classroom（Web）に**高速・高精度の横断検索**を付与する Chrome 拡張機能。Classroom API から安全にデータを取得し、ローカル IndexedDB に保存したコレクションを Fuse.js で検索します。
 
 > 日本語 UI 固定／ダーク/ライト自動追従／外部送信なし（OAuth 時を除く）
 
@@ -14,7 +14,12 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 - ⚡ **150ms 以内の候補表示**（インデックス済み時、10k 件規模想定）
 - 🧠 **Fuse.js ベース**の類似度検索＋日本語 N-gram 補助
 - 🕶 **テーマ連動**：Classroom のダーク/ライト自動検知
-- 🛡 **プライバシー・バイ・デザイン**：IndexedDB 保存、ネット送信ゼロ（OAuth 除く）
+- 🛡 **プライバシー・バイ・デザイン**：IndexedDB 保存、必要最小限のネット送信（OAuth と Classroom API のみ）
+
+セキュリティ強化（実装済み）
+- ナビゲーションは `https:` かつ `classroom.google.com` のみ許可
+- BG 経由の API コールは `https://classroom.googleapis.com` の `GET` のみ許可（任意 URL/メソッド禁止）
+- DOM 描画は `textContent`/`createTextNode` ベース（`innerHTML` 不使用）
 
 ---
 
@@ -37,8 +42,8 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 
 **必要権限（MV3）**
 
-- `host_permissions`: `https://classroom.google.com/*`
-- `permissions`: `storage`, `scripting`
+- `permissions`: `storage`, `scripting`, `identity`
+- `host_permissions`: `https://classroom.google.com/*`, `https://classroom.googleapis.com/*`, `https://www.googleapis.com/*`
 - `content_scripts`: `run_at: document_idle`
 
 ---
@@ -50,7 +55,7 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 - `↑ / ↓`：候補移動、`Enter`：決定、`Esc`：閉じる
 - フィルタ：教師・期日・添付タイプをチップ/ドロップダウンで AND 適用
 
-補足：上部バーのクイック検索（`nav.joJglb` 内）は独自クラス（`gcx-topbar`, `gcx-topbar-input`）でスタイリングしており、Classroom のメニュー実装と干渉しないように設計しています。
+補足：上部バーのクイック検索は独自クラス（`gcx-topbar`, `gcx-topbar-input`）でスタイリングしており、Classroom のメニュー実装と干渉しないように設計しています。
 
 ---
 
@@ -84,23 +89,24 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 ## アーキテクチャ（現状構成）
 
 - `manifest.json` # MV3 マニフェスト（ルート）
-- `src/content.js` # UI 注入（サイドバー／上部バー） / DOM 抽出（試作版）
+- `src/content.js` # UI 注入（トップバー・サジェスト） / IndexedDB / Fuse 検索
+- `src/background.js` # OAuth トークン取得 + Classroom API 代理フェッチ（許可ホスト/HTTPS/GET 限定）
+- `src/gcx-topbar.css` # トップバー UI スタイル
+- `src/libs/` # 同梱ライブラリ（`fuse.esm.js` ほか）
 - `scripts/` # 補助スクリプト（開発用）
-- `docs/` # ドキュメント（AGENTS.md, 要件定義 など）
+- `docs/` # ドキュメント（要件定義など）
 
 将来追加予定（設計済みだが未実装）
-- `src/bg.js`（Service Worker）
 - `src/db.js`（IndexedDB ラッパ）
 - `src/search.js`（Fuse 初期化/サジェスト）
 - `src/ui/`（サイドバー/結果パネル）
 - `options/`（再インデックス/削除/モード切替）
 
-**DOM / API 切替ポリシー**
+**API モードの方針**
 
-- 既定：DOM モード（速い・端末内完結）
-- 自動提案条件：主要セレクタ崩壊/ヒット率急減、データ>30k で顕著な遅延 等
-- 切替手順：同意ダイアログ → OAuth → Classroom API 読取 → 同一スキーマで索引  
-  ※API モードでも保存は IndexedDB、外部送信なし（OAuth 通信のみ）
+- 既定：API モード（OAuth 同意後、Classroom API から取得）
+- 保存：IndexedDB（ローカルのみ）に統一
+- ネット送信：OAuth と Classroom API へのアクセスのみ（任意 URL/メソッドは不許可）
 
 ---
 
@@ -110,7 +116,7 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 2. 教師・期日・添付タイプの**AND フィルタ**が正しく適用
 3. **添付タイトル/ファイル名**でヒット
 4. ダーク/ライト双方で**視認性**（コントラスト/ハイライト）良好
-5. **ネット送信なし**を DevTools Network で確認（API モード除く）
+5. **不要な外部送信なし**を DevTools Network で確認（OAuth と Classroom API 以外の通信が無い）
 6. DOM 崩壊時、**API 切替提案**→ 同意 → 正常動作
 
 ---
@@ -126,16 +132,18 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 
 ## パフォーマンス
 
-- 初回インデックス：`requestIdleCallback` による分割・スロットリング
-- 差分更新：MutationObserver ＋軽量再走査
-- データ増大対策：古文書ローリング、抜粋長上限、添付はメタのみ
+- 初回インデックス：段階的取得とインデックス作成（UI 応答を優先）
+- 差分更新：定期同期と差分判定（新規/削除を検出して反映）
+- データ増大対策：抜粋長上限、添付はメタのみ
 
 ---
 
-## プライバシー
+## プライバシー / セキュリティ
 
-- 既定で**外部送信ゼロ**。IndexedDB のみ保存（ローカル）
-- 再インデックス・全削除・モード切替を Options で提供
+- ローカル保存（IndexedDB）のみ。保存項目は最小限の方針
+- ナビゲーションは `https:` かつ `classroom.google.com` のみ許可
+- BG の Classroom API 代理フェッチは `https://classroom.googleapis.com` の `GET` 限定
+- DOM は `textContent` で描画（`innerHTML` 不使用）
 - 将来の匿名ログは**明示オプトイン**のみ
 
 ---
@@ -144,7 +152,7 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 
 - Chrome 最新版 / Classroom Web（管理端末は対象外）
 - 日本語 UI 固定（i18n は文言 JSON 化まで）
-- Classroom の DOM/レイアウト変更に依存（検知・フォールバック実装済）
+- Classroom の API 可用性に依存（トークン/権限/HTTP ステータスに応じて再試行/通知）
 
 ---
 
@@ -181,11 +189,11 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 
 ## FAQ
 
-**Q. なぜ DOM 優先？**  
-審査不要・即応・端末内完結で高速。API 障害/制限の影響を受けにくい。
+**Q. なぜ API ベース？**  
+スキーマが安定しており、データ取得が確実。ローカル IndexedDB に保存して Fuse.js で検索するため、以降の検索は高速です。
 
-**Q. いつ API に切替？**  
-セレクタ崩壊やデータ巨大化でヒット率/応答が劣化したときに自動提案。明示同意のうえで切替。
+**Q. どんなネット通信をしますか？**  
+OAuth によるトークン取得と、Classroom API（`https://classroom.googleapis.com`）への `GET` のみです。任意ドメイン/メソッドは許可していません。
 
 ---
 
@@ -199,3 +207,11 @@ Issue / PR 歓迎。方針：軽量・高速・私的利用の安全性を最優
 ## ライセンス
 
 TBD
+
+---
+
+## 同梱ライブラリについて
+
+- 使用中: `src/libs/fuse.esm.js`（曖昧検索/Fuse.js）
+- 将来検討・未使用: `src/libs/hotkeys.min.js`（キーボードショートカット）、`src/libs/idb.min.js`（IndexedDB ラッパ）
+  - 現状はブラウザ標準 API（IndexedDB）とシンプルなイベントで実装。将来的に保守性を優先する場合に差し替え可。
