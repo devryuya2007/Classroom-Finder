@@ -1273,9 +1273,19 @@ async function syncStreamPosts(options = {}) {
         email: getClassroomAccountEmail(),
       });
 
-      // アカウント切り替え時は必ずOAuth再認証を実行
+      // アカウント切り替え時はトークンをクリアしてからOAuth再認証を実行
       setTopbarPlaceholder("アカウント切り替えを検知しました...");
       try {
+        // 1. 古いアカウントのトークンを完全にクリア
+        console.log("[GCX] 🗑️ Clearing old account's OAuth tokens...");
+        await clearAllAuthTokens();
+        console.log("[GCX] ✓ Old tokens cleared");
+
+        // 2. 少し待機してトークンクリアが確実に反映されるようにする
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        // 3. 新しいアカウントでOAuth認証
+        console.log("[GCX] 🔓 Re-authenticating with new account...");
         await forceOAuthAuthentication();
         console.log(
           "[GCX] ✓ OAuth re-authentication completed after account switch"
@@ -1288,14 +1298,14 @@ async function syncStreamPosts(options = {}) {
 
       // 新しいアカウントのDBからデータを読み込み、Fuseを再初期化
       console.log(
-        "[GCX] Switching to new account's IndexedDB:",
+        "[GCX] 📂 Switching to new account's IndexedDB:",
         getStreamDbName()
       );
       savedPosts = await loadStreamPostsFromDb();
       if (fuse) {
         fuse.setCollection(savedPosts);
         console.log(
-          "[GCX] Fuse re-initialized with",
+          "[GCX] ✓ Fuse re-initialized with",
           savedPosts.length,
           "posts from new account"
         );

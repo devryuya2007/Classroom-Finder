@@ -95,6 +95,7 @@ function normalizeEmail(value) {
 async function resolveAccountFromHint(accountHint) {
   const accounts = await listIdentityAccounts();
   if (!accounts.length) {
+    console.warn("[GCX] ⚠️ No accounts available in Identity API");
     return { account: null, accounts };
   }
 
@@ -106,14 +107,22 @@ async function resolveAccountFromHint(accountHint) {
 
   if (accountHint && typeof accountHint === "object") {
     const { gaiaId, email, index } = accountHint;
+
+    // GAIA IDで検索
     if (gaiaId) {
       console.log("[GCX] 🔎 Searching by gaiaId:", gaiaId);
       const matchById = accounts.find((acc) => acc?.id === gaiaId);
       if (matchById) {
         console.log("[GCX] ✓ Found account by gaiaId:", matchById.email);
         return { account: matchById, accounts };
+      } else {
+        console.warn("[GCX] ⚠️ No match found for gaiaId:", gaiaId);
       }
+    } else {
+      console.log("[GCX] ℹ️ No gaiaId provided in hint");
     }
+
+    // メールアドレスで検索
     const normalizedEmail = normalizeEmail(email);
     if (normalizedEmail) {
       console.log("[GCX] 🔎 Searching by email:", normalizedEmail);
@@ -123,31 +132,48 @@ async function resolveAccountFromHint(accountHint) {
       if (matchByEmail) {
         console.log("[GCX] ✓ Found account by email:", matchByEmail.email);
         return { account: matchByEmail, accounts };
+      } else {
+        console.warn("[GCX] ⚠️ No match found for email:", normalizedEmail);
       }
+    } else {
+      console.log("[GCX] ℹ️ No email provided in hint");
     }
+
+    // インデックスで検索
     if (typeof index === "number" && index >= 0 && index < accounts.length) {
       console.log(
         "[GCX] 🔎 Using account by index:",
         index,
         "->",
-        accounts[index].email
+        accounts[index]?.email || accounts[index]?.id
       );
       return { account: accounts[index], accounts };
+    } else {
+      console.warn(
+        "[GCX] ⚠️ Invalid index:",
+        index,
+        "accounts length:",
+        accounts.length
+      );
     }
+  } else {
+    console.warn("[GCX] ⚠️ accountHint is invalid:", typeof accountHint);
   }
-  console.warn("[GCX] ❌ Could not resolve account from hint");
+
+  console.warn("[GCX] ❌ Could not resolve account from hint, using default");
   return { account: null, accounts };
 }
 
 let lastAccountId = null;
 let lastAccountFingerprint = null;
 
+// アカウント別のトークンを無効化
 async function invalidateAccountToken(account) {
   if (!account?.id) return;
   try {
     await new Promise((resolve) => {
       chrome.identity.getAuthToken(
-        { interactive: false, account: { id: account.id } }, // interactive: false に変更
+        { interactive: true, account: { id: account.id } },
         async (token) => {
           const runtimeError = chrome.runtime.lastError;
           if (runtimeError) {
@@ -156,7 +182,10 @@ async function invalidateAccountToken(account) {
             return;
           }
           if (token) {
-            console.log("[GCX] Removing cached token for account:", account.id);
+            console.log(
+              "[GCX] 🗑️ Removing cached token for account:",
+              account.email || account.id
+            );
             await removeCachedToken(token);
           }
           resolve();
@@ -168,17 +197,35 @@ async function invalidateAccountToken(account) {
   }
 }
 
+// 全アカウントのトークンを無効化（アカウント切り替え時）
+async function invalidateAllAccountTokens() {
+  console.log("[GCX] 🗑️ Invalidating all account tokens...");
+  const accounts = await listIdentityAccounts();
+  for (const account of accounts) {
+    await invalidateAccountToken(account);
+  }
+  console.log("[GCX] ✓ All account tokens invalidated");
+}
+
 async function getAuthToken({ interactive = false, accountHint } = {}) {
+  // アカウント切り替えを検知
   if (accountHint?.fingerprint) {
     if (
       lastAccountFingerprint &&
       accountHint.fingerprint !== lastAccountFingerprint
     ) {
-      console.log("[GCX] Account switch detected! Clearing all cached tokens");
+      console.log("[GCX] 🔄 Account switch detected in background!");
       console.log("[GCX] Previous fingerprint:", lastAccountFingerprint);
       console.log("[GCX] New fingerprint:", accountHint.fingerprint);
-      clearAllCachedTokens();
+
+      // 全アカウントのトークンを個別に無効化
+      await invalidateAllAccountTokens();
+
+      // さらに全キャッシュをクリア
+      await clearAllCachedTokens();
+
       lastAccountId = null;
+      console.log("[GCX] ✓ Token invalidation completed");
     }
     lastAccountFingerprint = accountHint.fingerprint;
   }
@@ -191,16 +238,19 @@ async function getAuthToken({ interactive = false, accountHint } = {}) {
     if (resolvedAccount?.id) {
       accountParam = { id: resolvedAccount.id };
       console.log(
-        "[GCX] Using account for token:",
-        resolvedAccount.id,
-        resolvedAccount.email
+        "[GCX] 🎯 Using account for token:",
+        resolvedAccount.email || resolvedAccount.id
       );
+
+      // 新しいアカウントに切り替わった場合、そのアカウントのトークンも無効化
       if (resolvedAccount.id !== lastAccountId) {
+        console.log("[GCX] 🔄 Account ID changed, invalidating old token");
         await invalidateAccountToken(resolvedAccount);
         lastAccountId = resolvedAccount.id;
       }
     } else {
-      console.warn("[GCX] Could not resolve account, will use default account");
+      console.warn("[GCX] ⚠️ Could not resolve account, using default");
+      console.warn("[GCX] 📋 Hint was:", JSON.stringify(accountHint, null, 2));
     }
   }
 
