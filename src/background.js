@@ -97,27 +97,45 @@ async function resolveAccountFromHint(accountHint) {
   if (!accounts.length) {
     return { account: null, accounts };
   }
+
+  console.log("[GCX] 🔍 Resolving account from hint:", accountHint);
+  console.log(
+    "[GCX] 📋 Available accounts:",
+    accounts.map((a) => ({ id: a.id, email: a.email }))
+  );
+
   if (accountHint && typeof accountHint === "object") {
     const { gaiaId, email, index } = accountHint;
     if (gaiaId) {
+      console.log("[GCX] 🔎 Searching by gaiaId:", gaiaId);
       const matchById = accounts.find((acc) => acc?.id === gaiaId);
       if (matchById) {
+        console.log("[GCX] ✓ Found account by gaiaId:", matchById.email);
         return { account: matchById, accounts };
       }
     }
     const normalizedEmail = normalizeEmail(email);
     if (normalizedEmail) {
+      console.log("[GCX] 🔎 Searching by email:", normalizedEmail);
       const matchByEmail = accounts.find(
         (acc) => normalizeEmail(acc?.email) === normalizedEmail
       );
       if (matchByEmail) {
+        console.log("[GCX] ✓ Found account by email:", matchByEmail.email);
         return { account: matchByEmail, accounts };
       }
     }
     if (typeof index === "number" && index >= 0 && index < accounts.length) {
+      console.log(
+        "[GCX] 🔎 Using account by index:",
+        index,
+        "->",
+        accounts[index].email
+      );
       return { account: accounts[index], accounts };
     }
   }
+  console.warn("[GCX] ❌ Could not resolve account from hint");
   return { account: null, accounts };
 }
 
@@ -129,7 +147,7 @@ async function invalidateAccountToken(account) {
   try {
     await new Promise((resolve) => {
       chrome.identity.getAuthToken(
-        { interactive: false, account: { id: account.id } },
+        { interactive: true, account: { id: account.id } },
         async (token) => {
           const runtimeError = chrome.runtime.lastError;
           if (runtimeError) {
@@ -170,7 +188,7 @@ async function getAuthToken({ interactive = false, accountHint } = {}) {
     resolvedAccount = result.account;
     if (resolvedAccount?.id) {
       accountParam = { id: resolvedAccount.id };
-      console.debug(
+      console.log(
         "[GCX] Using account for token:",
         resolvedAccount.id,
         resolvedAccount.email
@@ -217,7 +235,7 @@ async function getAuthToken({ interactive = false, accountHint } = {}) {
             "[GCX] ✓ Successfully obtained token via interactive auth"
           );
         } else {
-          console.debug(
+          console.log(
             "[GCX] Successfully obtained token for account:",
             resolvedAccount?.id || "default"
           );
@@ -241,21 +259,25 @@ async function removeCachedToken(token) {
   });
 }
 
-function clearAllCachedTokens() {
-  try {
-    chrome.identity.clearAllCachedAuthTokens(() => {
-      if (chrome.runtime.lastError) {
-        console.warn(
-          "[GCX] Failed to clear cached tokens",
-          chrome.runtime.lastError.message
-        );
-      } else {
-        console.debug("[GCX] Cleared cached OAuth tokens");
-      }
-    });
-  } catch (err) {
-    console.warn("[GCX] clearAllCachedAuthTokens threw", err);
-  }
+async function clearAllCachedTokens() {
+  return new Promise((resolve) => {
+    try {
+      chrome.identity.clearAllCachedAuthTokens(() => {
+        if (chrome.runtime.lastError) {
+          console.warn(
+            "[GCX] Failed to clear cached tokens",
+            chrome.runtime.lastError.message
+          );
+        } else {
+          console.log("[GCX] ✓ Cleared all cached OAuth tokens");
+        }
+        resolve();
+      });
+    } catch (err) {
+      console.warn("[GCX] clearAllCachedAuthTokens threw", err);
+      resolve();
+    }
+  });
 }
 
 function buildUrl(base, pathOrUrl, params) {
@@ -287,7 +309,7 @@ async function googleFetch(request = {}, accountHint) {
     interactiveOnRetry = true,
   } = request;
 
-  console.debug("[GCX] googleFetch:", path || url);
+  console.log("[GCX] 📡 API Request:", path || url);
 
   // Build and validate target URL strictly for Classroom API only
   const rawTarget = url || buildUrl(base, path || "", params);
@@ -335,9 +357,18 @@ async function googleFetch(request = {}, accountHint) {
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  console.log("═══════════════════════════════════════");
+  console.log("[GCX] 🔔 MESSAGE LISTENER TRIGGERED!");
+  console.log("═══════════════════════════════════════");
+  console.log("[GCX] 📦 Message object:", msg);
+  console.log("[GCX] 👤 Sender:", sender);
+  console.log("═══════════════════════════════════════");
+
   // メッセージチャンネルを開いたままにする
   (async () => {
     try {
+      console.log("[GCX] 📨 Message received:", msg?.type);
+
       if (!msg || typeof msg !== "object") {
         sendResponse({ ok: false, error: "Invalid message format" });
         return;
@@ -349,12 +380,48 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         return;
       }
 
+      // Ping handler to wake up Service Worker
+      if (msg.type === "PING") {
+        console.log("🏓🏓🏓 PING RECEIVED! 🏓🏓🏓");
+        console.log("[GCX] Responding with pong...");
+        sendResponse({
+          ok: true,
+          pong: true,
+          extensionName: "Classroom-Finder",
+          extensionId: chrome.runtime.id,
+          timestamp: Date.now(),
+        });
+        console.log("✅ PING response sent!");
+        return;
+      }
+
+      // Clear all cached tokens handler
+      if (msg.type === "GCX_CLEAR_TOKENS") {
+        console.log("[GCX] 🧹 Clearing all cached tokens...");
+        try {
+          await clearAllCachedTokens();
+          sendResponse({ ok: true });
+        } catch (error) {
+          console.error("[GCX] CLEAR_TOKENS error:", error);
+          sendResponse({
+            ok: false,
+            error: String((error && error.message) || error),
+          });
+        }
+        return;
+      }
+
       if (msg.type === "GCX_GOOGLE_GET_TOKEN") {
+        console.log(
+          "[GCX] 🔐 GET_TOKEN request, interactive:",
+          !!msg.interactive
+        );
         try {
           const token = await getAuthToken({
             interactive: !!msg.interactive,
             accountHint: msg.accountHint,
           });
+          console.log("[GCX] ✓ Token obtained, length:", token?.length || 0);
           sendResponse({ ok: true, token });
         } catch (error) {
           console.error("[GCX] GET_TOKEN error:", error);
@@ -378,7 +445,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // return を削除
       } else if (msg.type === "GCX_GOOGLE_FETCH") {
         try {
-          console.debug("[GCX] Processing GOOGLE_FETCH request");
+          console.log("[GCX] 📥 Processing GOOGLE_FETCH request");
           const res = await googleFetch(msg.request || {}, msg.accountHint);
           const ct = res.headers.get("content-type") || "";
           let data = null;
@@ -389,7 +456,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             data = await res.text();
           }
 
-          console.debug("[GCX] GOOGLE_FETCH completed, status:", res.status);
+          console.log("[GCX] ✓ GOOGLE_FETCH completed, status:", res.status);
           sendResponse({ ok: res.ok, status: res.status, data });
         } catch (error) {
           console.error("[GCX] GOOGLE_FETCH error:", error);
@@ -416,5 +483,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 });
 
 // Optional: simple ping to ensure SW is alive in dev
+console.log("═══════════════════════════════════════");
+console.log("🚀🚀🚀 SERVICE WORKER STARTED! 🚀🚀🚀");
+console.log("═══════════════════════════════════════");
 console.log("[GCX] background service worker loaded");
-clearAllCachedTokens();
+console.log("[GCX] Extension ID:", chrome.runtime.id);
+console.log(
+  "[GCX] Required OAuth Redirect URI:",
+  `https://${chrome.runtime.id}.chromiumapp.org/`
+);
+console.log("═══════════════════════════════════════");
+
+// 起動時にトークンをクリア（非同期）
+(async () => {
+  await clearAllCachedTokens();
+  console.log("[GCX] Ready for OAuth authentication");
+})();

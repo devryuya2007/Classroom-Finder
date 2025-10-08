@@ -47,6 +47,107 @@ const LOGIN_ERROR_KEYWORDS = [
 let identityAccounts = [];
 let lastAccountFingerprint = null; // アカウント切り替え検知用
 
+// Service Workerが起動していることを確認
+async function ensureServiceWorkerReady() {
+  const maxRetries = 10; // リトライ回数を増やす
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      console.log(
+        `[GCX] 🏓 Pinging Service Worker (attempt ${i + 1}/${maxRetries})...`
+      );
+
+      const ready = await new Promise((resolve) => {
+        const timeoutId = setTimeout(() => resolve(false), 5000); // タイムアウトを5秒に延長
+
+        console.log("[GCX] 📤 Sending PING message to background...");
+        console.log("[GCX] 🔍 My Extension ID:", chrome.runtime.id);
+        chrome.runtime.sendMessage(
+          { type: "PING", extensionId: chrome.runtime.id },
+          (response) => {
+            clearTimeout(timeoutId);
+            console.log("[GCX] 📥 PING response received:");
+            console.log("[GCX] 🔍 Response keys:", Object.keys(response || {}));
+            console.log("[GCX] 🔍 Response.ok:", response?.ok);
+            console.log("[GCX] 🔍 Response.pong:", response?.pong);
+            console.log(
+              "[GCX] 🔍 Response.extensionName:",
+              response?.extensionName
+            );
+            console.log(
+              "[GCX] 🔍 Response.extensionId:",
+              response?.extensionId
+            );
+            console.log("[GCX] 🔍 Expected extension: Classroom-Finder");
+            console.log("[GCX] 🔍 Expected extension ID:", chrome.runtime.id);
+
+            if (chrome.runtime.lastError) {
+              const errorMsg = chrome.runtime.lastError.message;
+              console.log("[GCX] ⚠️ Service Worker ping failed:", errorMsg);
+
+              // Extension context invalidated エラーの場合
+              if (
+                errorMsg.includes("Extension context invalidated") ||
+                errorMsg.includes("Receiving end does not exist")
+              ) {
+                console.error(
+                  "[GCX] ❌ Extension was reloaded. Please reload this page!"
+                );
+                // UIに警告を表示
+                setTopbarPlaceholder(
+                  "⚠️ 拡張機能が更新されました。ページを再読み込みしてください。"
+                );
+              }
+              resolve(false);
+            } else if (
+              response?.pong &&
+              response?.extensionName === "Classroom-Finder" &&
+              response?.extensionId === chrome.runtime.id
+            ) {
+              console.log(
+                "[GCX] ✓ Service Worker is ready (correct extension with correct ID)"
+              );
+              resolve(true);
+            } else if (response?.pong) {
+              console.warn(
+                "[GCX] ⚠️ Response from different extension or missing ID"
+              );
+              console.warn("[GCX] 🔍 Validation:", {
+                hasCorrectName: response?.extensionName === "Classroom-Finder",
+                hasCorrectId: response?.extensionId === chrome.runtime.id,
+                responseExtId: response?.extensionId,
+                myExtId: chrome.runtime.id,
+              });
+              resolve(false);
+            } else {
+              console.log("[GCX] ⚠️ Unexpected response:", response);
+              resolve(false);
+            }
+          }
+        );
+      });
+
+      if (ready) return true;
+
+      // 待機時間を指数的に増やす (500ms, 1000ms, 2000ms, 4000ms...)
+      const delay = 500 * Math.pow(2, i);
+      console.log(`[GCX]    Waiting ${delay}ms before retry...`);
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    } catch (err) {
+      console.log("[GCX] ⚠️ Service Worker ping error:", err);
+    }
+  }
+
+  console.error(
+    "[GCX] ❌ Service Worker did not respond after",
+    maxRetries,
+    "retries"
+  );
+  setTopbarPlaceholder(
+    "⚠️ Service Workerに接続できません。ページを再読み込みしてください。"
+  );
+  return false;
+}
+
 async function ensureIdentityAccounts() {
   if (identityAccounts.length) return identityAccounts;
   try {
@@ -98,6 +199,7 @@ const POLL_INTERVAL_MS = 5 * 60 * 1000; // 5分（0 で無効）
 const ALLOWED_NAV_HOSTS = new Set(["classroom.google.com"]);
 
 // 注意: ensureStyles は CSS を注入するだけ。検索 UI 本体は createTopbar()/injectTopbar() で生成・挿入。
+// CSS読み込みが失敗してもUIは動作するため、エラーは無視してログのみ出力
 function ensureStyles() {
   try {
     const href = getExtensionURL(STYLE_PATH);
@@ -130,33 +232,59 @@ function ensureStyles() {
         style.textContent = css;
       })
       .catch((error) => {
-        // Extension context が無効化されている場合は、エラーログを抑制
-        if (
-          error.message &&
-          error.message.includes("Extension context invalidated")
-        ) {
-          console.debug(
-            "[GCX] Extension context invalidated, skipping stylesheet load"
-          );
-        } else {
-          console.warn(
-            `[GCX] Failed to load stylesheet from ${STYLE_PATH}:`,
-            error.message
-          );
-        }
-        style.remove();
+        // CSSの読み込み失敗は致命的ではないため、警告のみ出力
+        // UIの基本機能は動作し、スタイルが適用されないだけ
+        console.debug(
+          "[GCX] Stylesheet load failed (non-critical):",
+          error.message || error
+        );
+        // 失敗したstyleタグは残しておく（空のスタイルでも問題なし）
       });
   } catch (error) {
-    // getExtensionURL が失敗した場合（Extension context invalidated）
+    // getExtensionURL が失敗した場合も無視（UIは動作する）
     console.debug(
-      "[GCX] Cannot load styles, extension context may be invalidated"
+      "[GCX] Cannot load styles (non-critical), UI will still work"
     );
   }
 }
 
 // ===== Google Classroom API helper =====
+// キャッシュされた全トークンをクリア
+async function clearAllAuthTokens() {
+  // Service Workerを確実に起動
+  await ensureServiceWorkerReady();
+
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      reject(new Error("Clear tokens timeout (10s)"));
+    }, 10000);
+
+    try {
+      chrome.runtime.sendMessage({ type: "GCX_CLEAR_TOKENS" }, (res) => {
+        clearTimeout(timeoutId);
+
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          console.warn("[GCX] Failed to clear tokens:", runtimeError.message);
+          resolve(); // エラーでも続行
+          return;
+        }
+        console.log("[GCX] ✓ All cached tokens cleared");
+        resolve();
+      });
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.warn("[GCX] Clear tokens error:", err);
+      resolve(); // エラーでも続行
+    }
+  });
+}
+
 // OAuth 認証を強制的に実行（interactive=true）
 async function forceOAuthAuthentication() {
+  // Service Workerを確実に起動
+  await ensureServiceWorkerReady();
+
   await ensureIdentityAccounts();
   const accountHint = getAccountHint();
 
@@ -204,6 +332,11 @@ async function forceOAuthAuthentication() {
 
 // バックグラウンドに依頼して Classroom API を叩く
 async function bgFetch(request, attempt = 0) {
+  // Service Workerを起動させる
+  if (attempt === 0) {
+    await ensureServiceWorkerReady();
+  }
+
   await ensureIdentityAccounts();
   const accountHint = getAccountHint();
 
@@ -799,16 +932,21 @@ function getWizGlobalData() {
 
 function getClassroomGaiaId() {
   const data = getWizGlobalData();
+  // デバッグレベルに変更（通常は非表示）
+  console.debug("[GCX] Looking for GAIA ID in WizGlobalData:", data);
+
   const candidateKeys = ["S06Grb", "W3Yyqf", "WZsZ1e", "Yllh3e"];
   if (data) {
     for (const key of candidateKeys) {
       const value = data[key];
       if (typeof value === "string" && /^\d{5,}$/.test(value)) {
+        console.log("[GCX] ✓ Found GAIA ID in key", key, ":", value);
         return value;
       }
     }
-    for (const value of Object.values(data)) {
+    for (const [key, value] of Object.entries(data)) {
       if (typeof value === "string" && /^\d{5,}$/.test(value)) {
+        console.log("[GCX] ✓ Found GAIA ID in data key", key, ":", value);
         return value;
       }
     }
@@ -816,8 +954,14 @@ function getClassroomGaiaId() {
   const metaId = document.querySelector('meta[name="og-profile-id"]');
   const metaValue = metaId?.getAttribute("content");
   if (metaValue && /^\d{5,}$/.test(metaValue.trim())) {
+    console.log("[GCX] ✓ Found GAIA ID in meta tag:", metaValue.trim());
     return metaValue.trim();
   }
+  // GAIA IDが見つからない場合（学校アカウントなどで正常）
+  // デバッグレベルに変更して通常は非表示
+  console.debug(
+    "[GCX] GAIA ID not found, using email/index for account matching"
+  );
   return null;
 }
 
@@ -1130,40 +1274,63 @@ async function syncStreamPosts(options = {}) {
   syncInFlight = true;
   let savedPosts = [];
   try {
-    // アカウント切り替え検知: fingerprint が変わったら OAuth 再認証
+    // アカウント情報を最新化
+    await ensureIdentityAccounts();
+
+    // 現在のアカウント指紋を取得
     const currentFingerprint = AccountIdentityHelper.getFingerprint();
     const isManualRefresh = options.source === "manual";
 
-    if (
-      lastAccountFingerprint &&
-      lastAccountFingerprint !== currentFingerprint
-    ) {
-      console.log("[GCX] Account switch detected during sync");
+    // アカウント切り替え検知
+    const accountSwitched =
+      lastAccountFingerprint && lastAccountFingerprint !== currentFingerprint;
+
+    if (accountSwitched) {
+      console.log("[GCX] 🔄 Account switch detected!");
       console.log("[GCX] Previous fingerprint:", lastAccountFingerprint);
       console.log("[GCX] Current fingerprint:", currentFingerprint);
+      console.log("[GCX] Current account:", {
+        index: getAccountIndex(),
+        gaiaId: getClassroomGaiaId(),
+        email: getClassroomAccountEmail(),
+      });
 
-      // 手動リフレッシュ以外（定期同期）でもアカウント切り替えがあれば OAuth 再認証
-      if (!isManualRefresh) {
+      // アカウント切り替え時は必ずOAuth再認証を実行
+      setTopbarPlaceholder("アカウント切り替えを検知しました...");
+      try {
+        await forceOAuthAuthentication();
         console.log(
-          "[GCX] Forcing OAuth re-authentication due to account switch"
+          "[GCX] ✓ OAuth re-authentication completed after account switch"
         );
-        setTopbarPlaceholder("アカウント切り替えを検知しました...");
-        try {
-          await forceOAuthAuthentication();
-          console.log(
-            "[GCX] OAuth re-authentication completed after account switch"
-          );
-        } catch (authErr) {
-          console.error("[GCX] OAuth re-authentication failed:", authErr);
-          setTopbarPlaceholder("認証に失敗しました");
-          throw authErr;
-        }
+      } catch (authErr) {
+        console.error("[GCX] OAuth re-authentication failed:", authErr);
+        setTopbarPlaceholder("認証に失敗しました");
+        throw authErr;
+      }
+
+      // 新しいアカウントのDBからデータを読み込み、Fuseを再初期化
+      console.log(
+        "[GCX] Switching to new account's IndexedDB:",
+        getStreamDbName()
+      );
+      savedPosts = await loadStreamPostsFromDb();
+      if (fuse) {
+        fuse.setCollection(savedPosts);
+        console.log(
+          "[GCX] Fuse re-initialized with",
+          savedPosts.length,
+          "posts from new account"
+        );
       }
     }
 
     lastAccountFingerprint = currentFingerprint;
 
-    savedPosts = await loadStreamPostsFromDb();
+    // アカウント切り替えがなかった場合は通常の読み込み
+    if (!accountSwitched) {
+      savedPosts = await loadStreamPostsFromDb();
+    }
+
     const currentPostsRaw = await fetchAllAnnouncementsPosts();
 
     const existingPosts = toArray(savedPosts);
@@ -1514,6 +1681,8 @@ function createTopbar() {
       // 1. まず OAuth 認証を強制実行
       setTopbarPlaceholder("認証中...");
       try {
+        // 古いトークンをクリアしてから再認証
+        await clearAllAuthTokens();
         await forceOAuthAuthentication();
         console.log("[GCX] OAuth re-authentication completed");
       } catch (authErr) {
@@ -1557,10 +1726,102 @@ function ensureTopbar() {
   }
   return topbar;
 }
+// UI 永続化のための MutationObserver とタイマー
+let topbarObserver = null;
+let topbarCheckInterval = null;
+
+// アカウント初期化完了フラグ
+let accountInitialized = false;
+
+// トップバーが消えていないかチェックし、消えていたら再注入
+function checkTopbarPresence() {
+  const existing = document.getElementById(TOPBAR_ID);
+  if (!existing || !document.body.contains(existing)) {
+    console.debug("[GCX] Topbar missing, re-injecting");
+    ensureTopbar();
+  }
+}
+
+// DOM変更を監視してトップバーの削除を検知
+function setupTopbarObserver() {
+  if (topbarObserver) return;
+
+  topbarObserver = new MutationObserver((mutations) => {
+    for (const mutation of mutations) {
+      // removedNodesにトップバーが含まれていたら即座に再注入
+      for (const node of mutation.removedNodes) {
+        if (
+          node.id === TOPBAR_ID ||
+          (node.contains && node.contains(document.getElementById(TOPBAR_ID)))
+        ) {
+          console.debug("[GCX] Topbar removed by DOM mutation, re-injecting");
+          ensureTopbar();
+          return;
+        }
+      }
+    }
+  });
+
+  // body全体を監視（childList: 子要素の追加/削除, subtree: 子孫要素も含む）
+  topbarObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+// 定期的なチェックも併用（念のため）
+function setupTopbarCheckInterval() {
+  if (topbarCheckInterval) return;
+  // 30秒ごとにチェック
+  topbarCheckInterval = setInterval(checkTopbarPresence, 30000);
+}
+
 // トップバーを維持しつつデータ同期を定期実行
-function observe() {
-  // DOM 監視は不要。トップバー状態の維持と API 同期のみ行う。
+async function observe() {
+  // 初回注入
   ensureTopbar();
+
+  // UI永続化の仕組みをセットアップ
+  setupTopbarObserver();
+  setupTopbarCheckInterval();
+
+  // アカウント情報の初期化
+  try {
+    await ensureIdentityAccounts();
+    const initialFingerprint = AccountIdentityHelper.getFingerprint();
+    lastAccountFingerprint = initialFingerprint;
+    accountInitialized = true;
+    console.log("[GCX] Account initialized:", {
+      fingerprint: initialFingerprint,
+      index: getAccountIndex(),
+      gaiaId: getClassroomGaiaId(),
+      email: getClassroomAccountEmail(),
+      dbName: getStreamDbName(),
+    });
+
+    // 🆕 初回起動時にOAuth認証を実行（認証画面を表示）
+    console.log("[GCX] 🔓 Requesting initial OAuth authentication...");
+    try {
+      // 古いトークンをクリアしてから認証
+      console.log("[GCX] 📞 Calling clearAllAuthTokens()...");
+      await clearAllAuthTokens();
+      console.log("[GCX] ✓ clearAllAuthTokens() completed");
+
+      console.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
+      await forceOAuthAuthentication();
+      console.log("[GCX] ✓ Initial OAuth authentication successful");
+    } catch (authErr) {
+      console.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
+      console.error("[GCX] Error stack:", authErr.stack);
+      setTopbarPlaceholder(
+        "認証に失敗しました。更新ボタンをクリックしてください。"
+      );
+    }
+  } catch (err) {
+    console.warn("[GCX] Failed to initialize account info", err);
+  }
+
+  // 初回同期
   void syncStreamPosts().catch((err) => {
     // Extension context invalidated の場合は、ページリロードを促す
     if (
@@ -1587,7 +1848,9 @@ function observe() {
   // 定期的にデータを同期（5 分ごと）
   if (POLL_INTERVAL_MS > 0) {
     setInterval(() => {
-      ensureTopbar();
+      // 同期前にUIの存在を確認
+      checkTopbarPresence();
+
       void syncStreamPosts().catch((err) => {
         // Extension context invalidated の場合は、ページリロードを促す
         if (
@@ -2158,6 +2421,11 @@ function rerunLastQuery() {
 
 // コンテンツスクリプト全体の初期化ルーチン
 async function init() {
+  // ★最初にService Workerを起動★
+  console.log("[GCX] 🚀 Waking up Service Worker...");
+  await ensureServiceWorkerReady();
+  console.log("[GCX] ✓ Service Worker is active");
+
   ensureTopbar();
   await loadLocalLibs();
   if (API_MODE) {

@@ -34,8 +34,7 @@
     }
   ],
   "background": {
-    "service_worker": "src/background.js",
-    "type": "module"
+    "service_worker": "src/background.js"
   },
   "oauth2": {
     "client_id": "742269214393-qqmtj4pgku79831q0pi9s0vh236tc7cl.apps.googleusercontent.com",
