@@ -45,12 +45,20 @@ const LOGIN_ERROR_KEYWORDS = [
 ];
 
 let identityAccounts = [];
+let lastAccountFingerprint = null; // アカウント切り替え検知用
 
 async function ensureIdentityAccounts() {
   if (identityAccounts.length) return identityAccounts;
   try {
     const accounts = await new Promise((resolve, reject) => {
+      // タイムアウト設定（10秒）
+      const timeoutId = setTimeout(() => {
+        reject(new Error("Identity accounts fetch timeout (10s)"));
+      }, 10000);
+
       chrome.runtime.sendMessage({ type: "GCX_IDENTITY_LIST" }, (res) => {
+        clearTimeout(timeoutId);
+
         const runtimeError = chrome.runtime.lastError;
         if (runtimeError) {
           reject(new Error(runtimeError.message));
@@ -127,36 +135,128 @@ function ensureStyles() {
 }
 
 // ===== Google Classroom API helper =====
-// バックグラウンドに依頼して Classroom API を叩く
-async function bgFetch(request) {
+// OAuth 認証を強制的に実行（interactive=true）
+async function forceOAuthAuthentication() {
   await ensureIdentityAccounts();
   const accountHint = getAccountHint();
+
+  console.log("[GCX] Forcing OAuth authentication for account:", accountHint);
+
   return new Promise((resolve, reject) => {
+    // タイムアウト設定（30秒）
+    const timeoutId = setTimeout(() => {
+      reject(new Error("OAuth authentication timeout (30s)"));
+    }, 30000);
+
+    try {
+      chrome.runtime.sendMessage(
+        {
+          type: "GCX_GOOGLE_GET_TOKEN",
+          interactive: true, // 強制的に認証画面を表示
+          accountHint,
+        },
+        (res) => {
+          clearTimeout(timeoutId);
+
+          const runtimeError = chrome.runtime.lastError;
+          if (runtimeError) {
+            console.error(
+              "[GCX] OAuth authentication failed:",
+              runtimeError.message
+            );
+            reject(new Error(runtimeError.message));
+            return;
+          }
+          if (!res || !res.ok) {
+            reject(new Error(res?.error || "OAuth authentication failed"));
+            return;
+          }
+          console.log("[GCX] ✓ OAuth authentication successful");
+          resolve(res.token);
+        }
+      );
+    } catch (err) {
+      clearTimeout(timeoutId);
+      reject(err);
+    }
+  });
+}
+
+// バックグラウンドに依頼して Classroom API を叩く
+async function bgFetch(request, attempt = 0) {
+  await ensureIdentityAccounts();
+  const accountHint = getAccountHint();
+
+  return new Promise((resolve, reject) => {
+    // タイムアウト設定（30秒）
+    const timeoutId = setTimeout(() => {
+      reject(new Error("Background fetch timeout (30s)"));
+    }, 30000);
+
     try {
       chrome.runtime.sendMessage(
         { type: "GCX_GOOGLE_FETCH", request, accountHint },
         (res) => {
+          clearTimeout(timeoutId);
+
           const runtimeError = chrome.runtime.lastError;
           if (runtimeError) {
+            const message = runtimeError.message || "Extension runtime error";
+
+            // リトライ可能なエラー: コンテキスト無効化、メッセージチャンネルクローズ
             if (
-              typeof runtimeError.message === "string" &&
-              runtimeError.message.includes("Extension context invalidated")
+              attempt < 3 &&
+              typeof message === "string" &&
+              (message.includes("Extension context invalidated") ||
+                message.includes("message channel closed") ||
+                message.includes("message port closed"))
             ) {
-              console.warn("[GCX] background context invalidated; reloading page");
+              const backoffMs = 500 * Math.pow(2, attempt); // 指数バックオフ: 500ms, 1s, 2s
+              console.warn(
+                `[GCX] ${message} (retry ${
+                  attempt + 1
+                }/${3} after ${backoffMs}ms)`
+              );
               setTimeout(() => {
-                window.location.reload();
-              }, 0);
+                bgFetch(request, attempt + 1)
+                  .then(resolve)
+                  .catch(reject);
+              }, backoffMs);
+              return;
             }
-            reject(new Error(runtimeError.message));
+            reject(new Error(message));
             return;
           }
-          if (!res) return reject(new Error("No response from background"));
-          if (!res.ok)
-            return reject(new Error(res.error || `HTTP ${res.status}`));
+
+          if (!res) {
+            if (attempt < 3) {
+              const backoffMs = 500 * Math.pow(2, attempt);
+              console.warn(
+                `[GCX] No response (retry ${
+                  attempt + 1
+                }/${3} after ${backoffMs}ms)`
+              );
+              setTimeout(() => {
+                bgFetch(request, attempt + 1)
+                  .then(resolve)
+                  .catch(reject);
+              }, backoffMs);
+              return;
+            }
+            reject(new Error("No response from background"));
+            return;
+          }
+
+          if (!res.ok) {
+            reject(new Error(res.error || `HTTP ${res.status}`));
+            return;
+          }
+
           resolve(res.data);
         }
       );
     } catch (err) {
+      clearTimeout(timeoutId);
       reject(err);
     }
   });
@@ -238,24 +338,37 @@ async function fetchAllAnnouncementsPosts() {
   const courses = await listAllCourses();
   const posts = [];
   let counter = 0;
-  const concurrency = 5;
+  const concurrency = 2; // Service Worker への負荷をさらに軽減: 3 → 2
   let i = 0;
+
   // 並列取得用のワーカー（コースを順番に処理）
   async function worker() {
     while (i < courses.length) {
       const idx = i++;
       const course = courses[idx];
       try {
+        // 各リクエスト間に100msの遅延を入れてService Workerの負荷を分散
+        if (idx > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+
         const anns = await listAnnouncementsForCourse(course.id);
         for (const ann of anns) {
           counter += 1;
           posts.push(mapAnnouncementToPost(ann, course, counter));
         }
       } catch (err) {
-        console.warn("[GCX] announcements fetch failed", course?.id, err);
+        console.warn(
+          `[GCX] announcements fetch failed for course ${course?.id} (${
+            course?.name || "unknown"
+          })`,
+          err.message || err
+        );
+        // エラーが発生してもスキップして次のコースへ続行
       }
     }
   }
+
   await Promise.all(
     Array.from({ length: Math.min(concurrency, courses.length) }, worker)
   );
@@ -681,7 +794,7 @@ function getClassroomAccountEmail() {
   }
 
   const selectors = [
-    '[data-email]',
+    "[data-email]",
     'a[aria-label*="@"]',
     'a[href*="SignOutOptions"][aria-label]',
     'img[alt*="@"]',
@@ -711,7 +824,6 @@ function getAccountHint() {
     gaiaId: getClassroomGaiaId(),
     email: getClassroomAccountEmail(),
     fingerprint: AccountIdentityHelper.getFingerprint(),
-
   };
 }
 
@@ -966,7 +1078,7 @@ function resetSearchResults() {
 }
 
 // API 経由で最新を取り込み、差分だけ追加
-async function syncStreamPosts(_options = {}) {
+async function syncStreamPosts(options = {}) {
   if (!API_MODE) {
     console.info("[GCX] API mode=false (disabled)");
     return;
@@ -975,6 +1087,39 @@ async function syncStreamPosts(_options = {}) {
   syncInFlight = true;
   let savedPosts = [];
   try {
+    // アカウント切り替え検知: fingerprint が変わったら OAuth 再認証
+    const currentFingerprint = AccountIdentityHelper.getFingerprint();
+    const isManualRefresh = options.source === "manual";
+
+    if (
+      lastAccountFingerprint &&
+      lastAccountFingerprint !== currentFingerprint
+    ) {
+      console.log("[GCX] Account switch detected during sync");
+      console.log("[GCX] Previous fingerprint:", lastAccountFingerprint);
+      console.log("[GCX] Current fingerprint:", currentFingerprint);
+
+      // 手動リフレッシュ以外（定期同期）でもアカウント切り替えがあれば OAuth 再認証
+      if (!isManualRefresh) {
+        console.log(
+          "[GCX] Forcing OAuth re-authentication due to account switch"
+        );
+        setTopbarPlaceholder("アカウント切り替えを検知しました...");
+        try {
+          await forceOAuthAuthentication();
+          console.log(
+            "[GCX] OAuth re-authentication completed after account switch"
+          );
+        } catch (authErr) {
+          console.error("[GCX] OAuth re-authentication failed:", authErr);
+          setTopbarPlaceholder("認証に失敗しました");
+          throw authErr;
+        }
+      }
+    }
+
+    lastAccountFingerprint = currentFingerprint;
+
     savedPosts = await loadStreamPostsFromDb();
     const currentPostsRaw = await fetchAllAnnouncementsPosts();
 
@@ -1322,7 +1467,22 @@ function createTopbar() {
     try {
       refreshBtn.disabled = true; // 連打防止
       refreshBtn.classList.add("is-spinning");
+
+      // 1. まず OAuth 認証を強制実行
+      setTopbarPlaceholder("認証中...");
+      try {
+        await forceOAuthAuthentication();
+        console.log("[GCX] OAuth re-authentication completed");
+      } catch (authErr) {
+        console.error("[GCX] OAuth re-authentication failed:", authErr);
+        setTopbarPlaceholder("認証に失敗しました");
+        throw authErr;
+      }
+
+      // 2. 認証成功後、データを同期
+      setTopbarPlaceholder("データを取得中...");
       await syncStreamPosts({ source: "manual" });
+      setTopbarPlaceholder("");
     } catch (err) {
       console.warn("[GCX] manual sync failed", err);
       flashRefreshError(err);
@@ -1658,11 +1818,10 @@ function cssEscapeSafe(value) {
       (code >= 0x0001 && code <= 0x001f) ||
       code === 0x007f ||
       (index === 0 && code >= 0x0030 && code <= 0x0039) ||
-      (
-        index === 1 &&
+      (index === 1 &&
         string.charCodeAt(0) === 0x002d &&
-        code >= 0x0030 && code <= 0x0039
-      ) ||
+        code >= 0x0030 &&
+        code <= 0x0039) ||
       (index === 0 && code === 0x002d && length === 1)
     ) {
       result += "\\" + code.toString(16) + " ";
@@ -1747,7 +1906,10 @@ async function handleSuggestionActivation(item) {
       return false;
     }
     if (!ALLOWED_NAV_HOSTS.has(url.hostname)) {
-      console.warn("[GCX] Blocked navigation host", { href, host: url.hostname });
+      console.warn("[GCX] Blocked navigation host", {
+        href,
+        host: url.hostname,
+      });
       return false;
     }
     window.location.assign(url.toString());
