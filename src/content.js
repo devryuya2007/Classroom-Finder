@@ -44,8 +44,166 @@ const LOGIN_ERROR_KEYWORDS = [
   "http 401",
 ];
 
+const CHANNEL_TOKEN_KEY = "gcxMessageChannelToken";
+const CHANNEL_TOKEN_LENGTH = 64;
+const AUTH_INIT_STATE_KEY = "gcxAuthInitStateV1";
+
 let identityAccounts = [];
 let lastAccountFingerprint = null; // アカウント切り替え検知用
+let lastAccountKey = null;
+
+let cachedChannelToken = null;
+let channelTokenPromise = null;
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (Object.prototype.hasOwnProperty.call(changes, CHANNEL_TOKEN_KEY)) {
+    const next = changes[CHANNEL_TOKEN_KEY]?.newValue;
+    if (typeof next === "string" && next.length >= CHANNEL_TOKEN_LENGTH) {
+      cachedChannelToken = next;
+    } else {
+      cachedChannelToken = null;
+    }
+  }
+});
+
+function isValidChannelToken(value) {
+  return typeof value === "string" && value.length >= CHANNEL_TOKEN_LENGTH;
+}
+
+function readChannelTokenFromStorage() {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.storage.local.get([CHANNEL_TOKEN_KEY], (items) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(items?.[CHANNEL_TOKEN_KEY] || null);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+function requestChannelTokenFromBackground() {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({ type: "GCX_GET_CHANNEL_TOKEN" }, (res) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        if (!res?.ok || !isValidChannelToken(res.channelToken)) {
+          reject(
+            new Error(res?.error || "Failed to obtain channel token from SW")
+          );
+          return;
+        }
+        resolve(res.channelToken);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function ensureChannelToken() {
+  if (cachedChannelToken) return cachedChannelToken;
+  if (channelTokenPromise) return channelTokenPromise;
+
+  channelTokenPromise = (async () => {
+    const stored = await readChannelTokenFromStorage().catch(() => null);
+    if (isValidChannelToken(stored)) {
+      cachedChannelToken = stored;
+      return stored;
+    }
+
+    const token = await requestChannelTokenFromBackground();
+    cachedChannelToken = token;
+    return token;
+  })();
+
+  try {
+    return await channelTokenPromise;
+  } finally {
+    channelTokenPromise = null;
+  }
+}
+
+async function readAuthInitState() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([AUTH_INIT_STATE_KEY], (items) => {
+        if (chrome.runtime.lastError) {
+          console.debug(
+            "[GCX] readAuthInitState failed",
+            chrome.runtime.lastError.message
+          );
+          resolve({});
+          return;
+        }
+        const raw = items?.[AUTH_INIT_STATE_KEY];
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          resolve({ ...raw });
+        } else {
+          resolve({});
+        }
+      });
+    } catch (err) {
+      console.debug("[GCX] readAuthInitState threw", err);
+      resolve({});
+    }
+  });
+}
+
+async function writeAuthInitState(state) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set(
+        { [AUTH_INIT_STATE_KEY]: state },
+        () => {
+          if (chrome.runtime.lastError) {
+            console.debug(
+              "[GCX] writeAuthInitState failed",
+              chrome.runtime.lastError.message
+            );
+          }
+          resolve();
+        }
+      );
+    } catch (err) {
+      console.debug("[GCX] writeAuthInitState threw", err);
+      resolve();
+    }
+  });
+}
+
+async function isAuthInitializedForKey(accountKey) {
+  if (!accountKey) return false;
+  const state = await readAuthInitState();
+  return Boolean(state?.[accountKey]);
+}
+
+async function markAuthInitialized(accountKey) {
+  if (!accountKey) return;
+  const state = await readAuthInitState();
+  if (state[accountKey]) return;
+  state[accountKey] = Date.now();
+  await writeAuthInitState(state);
+  console.log("[GCX] ✓ Recorded OAuth initialization for", accountKey);
+}
+
+async function clearAuthInitialized(accountKey) {
+  if (!accountKey) return;
+  const state = await readAuthInitState();
+  if (!state[accountKey]) return;
+  delete state[accountKey];
+  await writeAuthInitState(state);
+  console.log("[GCX] ℹ️ Cleared OAuth initialization flag for", accountKey);
+}
 
 // Service Workerが起動していることを確認
 async function ensureServiceWorkerReady() {
@@ -57,11 +215,25 @@ async function ensureServiceWorkerReady() {
         console.log("[GCX] 🏓 Checking Service Worker...");
       }
 
+      let channelToken;
+      try {
+        channelToken = await ensureChannelToken();
+      } catch (error) {
+        console.error("[GCX] ⚠️ Failed to obtain channel token", error);
+        const fallbackDelay = 500 * Math.pow(2, i);
+        await new Promise((resolve) => setTimeout(resolve, fallbackDelay));
+        continue;
+      }
+
       const ready = await new Promise((resolve) => {
         const timeoutId = setTimeout(() => resolve(false), 5000);
 
         chrome.runtime.sendMessage(
-          { type: "PING", extensionId: chrome.runtime.id },
+          {
+            type: "PING",
+            channelToken,
+            extensionId: chrome.runtime.id,
+          },
           (response) => {
             clearTimeout(timeoutId);
 
@@ -131,6 +303,15 @@ async function ensureServiceWorkerReady() {
 
 async function ensureIdentityAccounts() {
   if (identityAccounts.length) return identityAccounts;
+
+  let channelToken;
+  try {
+    channelToken = await ensureChannelToken();
+  } catch (err) {
+    console.warn("[GCX] Failed to obtain channel token for identity list", err);
+    return identityAccounts;
+  }
+
   try {
     const accounts = await new Promise((resolve, reject) => {
       // タイムアウト設定（10秒）
@@ -138,20 +319,23 @@ async function ensureIdentityAccounts() {
         reject(new Error("Identity accounts fetch timeout (10s)"));
       }, 10000);
 
-      chrome.runtime.sendMessage({ type: "GCX_IDENTITY_LIST" }, (res) => {
-        clearTimeout(timeoutId);
+      chrome.runtime.sendMessage(
+        { type: "GCX_IDENTITY_LIST", channelToken },
+        (res) => {
+          clearTimeout(timeoutId);
 
-        const runtimeError = chrome.runtime.lastError;
-        if (runtimeError) {
-          reject(new Error(runtimeError.message));
-          return;
+          const runtimeError = chrome.runtime.lastError;
+          if (runtimeError) {
+            reject(new Error(runtimeError.message));
+            return;
+          }
+          if (!res || !Array.isArray(res.accounts)) {
+            resolve([]);
+            return;
+          }
+          resolve(res.accounts);
         }
-        if (!res || !Array.isArray(res.accounts)) {
-          resolve([]);
-          return;
-        }
-        resolve(res.accounts);
-      });
+      );
     });
     if (Array.isArray(accounts)) {
       identityAccounts = accounts;
@@ -235,24 +419,41 @@ async function clearAllAuthTokens() {
   // Service Workerを確実に起動
   await ensureServiceWorkerReady();
 
+  try {
+    await clearAuthInitialized(AccountIdentityHelper.getCompositeKey());
+  } catch (err) {
+    console.debug("[GCX] clearAuthInitialized skipped", err);
+  }
+
+  let channelToken;
+  try {
+    channelToken = await ensureChannelToken();
+  } catch (err) {
+    console.warn("[GCX] Failed to obtain channel token for clear tokens", err);
+    return;
+  }
+
   return new Promise((resolve, reject) => {
     const timeoutId = setTimeout(() => {
       reject(new Error("Clear tokens timeout (10s)"));
     }, 10000);
 
     try {
-      chrome.runtime.sendMessage({ type: "GCX_CLEAR_TOKENS" }, (res) => {
-        clearTimeout(timeoutId);
+      chrome.runtime.sendMessage(
+        { type: "GCX_CLEAR_TOKENS", channelToken },
+        (res) => {
+          clearTimeout(timeoutId);
 
-        const runtimeError = chrome.runtime.lastError;
-        if (runtimeError) {
-          console.warn("[GCX] Failed to clear tokens:", runtimeError.message);
-          resolve(); // エラーでも続行
-          return;
+          const runtimeError = chrome.runtime.lastError;
+          if (runtimeError) {
+            console.warn("[GCX] Failed to clear tokens:", runtimeError.message);
+            resolve(); // エラーでも続行
+            return;
+          }
+          console.log("[GCX] ✓ All cached tokens cleared");
+          resolve();
         }
-        console.log("[GCX] ✓ All cached tokens cleared");
-        resolve();
-      });
+      );
     } catch (err) {
       clearTimeout(timeoutId);
       console.warn("[GCX] Clear tokens error:", err);
@@ -271,6 +472,15 @@ async function forceOAuthAuthentication() {
 
   console.log("[GCX] Forcing OAuth authentication for account:", accountHint);
 
+  let channelToken;
+  try {
+    channelToken = await ensureChannelToken();
+  } catch (err) {
+    throw new Error(
+      `Failed to obtain channel token for OAuth authentication: ${err?.message || err}`
+    );
+  }
+
   return new Promise((resolve, reject) => {
     // タイムアウト設定（30秒）
     const timeoutId = setTimeout(() => {
@@ -283,6 +493,7 @@ async function forceOAuthAuthentication() {
           type: "GCX_GOOGLE_GET_TOKEN",
           interactive: true, // 強制的に認証画面を表示
           accountHint,
+          channelToken,
         },
         (res) => {
           clearTimeout(timeoutId);
@@ -301,6 +512,14 @@ async function forceOAuthAuthentication() {
             return;
           }
           console.log("[GCX] ✓ OAuth authentication successful");
+          markAuthInitialized(AccountIdentityHelper.getCompositeKey()).catch(
+            (err) => {
+              console.debug(
+                "[GCX] markAuthInitialized failed (non-critical)",
+                err
+              );
+            }
+          );
           resolve(res.token);
         }
       );
@@ -320,6 +539,14 @@ async function bgFetch(request, attempt = 0) {
 
   await ensureIdentityAccounts();
   const accountHint = getAccountHint();
+  let channelToken;
+  try {
+    channelToken = await ensureChannelToken();
+  } catch (err) {
+    throw new Error(
+      `Failed to obtain channel token for fetch: ${err?.message || err}`
+    );
+  }
 
   return new Promise((resolve, reject) => {
     // タイムアウト設定（30秒）
@@ -329,7 +556,7 @@ async function bgFetch(request, attempt = 0) {
 
     try {
       chrome.runtime.sendMessage(
-        { type: "GCX_GOOGLE_FETCH", request, accountHint },
+        { type: "GCX_GOOGLE_FETCH", request, accountHint, channelToken },
         (res) => {
           clearTimeout(timeoutId);
 
@@ -986,8 +1213,10 @@ function getAccountHint() {
   const fallbackEmail = normalizeEmail(account?.email);
   return {
     index: getAccountIndex(),
+    authUser: getAccountIndex(),
     gaiaId: getClassroomGaiaId(),
-    email: getClassroomAccountEmail(),
+    email: getClassroomAccountEmail() || fallbackEmail,
+    accountKey: AccountIdentityHelper.getCompositeKey(),
     fingerprint: AccountIdentityHelper.getFingerprint(),
   };
 }
@@ -1257,11 +1486,14 @@ async function syncStreamPosts(options = {}) {
 
     // 現在のアカウント指紋を取得
     const currentFingerprint = AccountIdentityHelper.getFingerprint();
+    const currentAccountKey = AccountIdentityHelper.getCompositeKey();
     const isManualRefresh = options.source === "manual";
 
     // アカウント切り替え検知
     const accountSwitched =
-      lastAccountFingerprint && lastAccountFingerprint !== currentFingerprint;
+      (lastAccountFingerprint &&
+        lastAccountFingerprint !== currentFingerprint) ||
+      (lastAccountKey && lastAccountKey !== currentAccountKey);
 
     if (accountSwitched) {
       console.log("[GCX] 🔄 Account switch detected!");
@@ -1278,6 +1510,14 @@ async function syncStreamPosts(options = {}) {
       try {
         // 1. 古いアカウントのトークンを完全にクリア
         console.log("[GCX] 🗑️ Clearing old account's OAuth tokens...");
+        try {
+          await clearAuthInitialized(currentAccountKey);
+        } catch (err) {
+          console.debug(
+            "[GCX] clearAuthInitialized during switch failed",
+            err
+          );
+        }
         await clearAllAuthTokens();
         console.log("[GCX] ✓ Old tokens cleared");
 
@@ -1315,6 +1555,7 @@ async function syncStreamPosts(options = {}) {
     }
 
     lastAccountFingerprint = currentFingerprint;
+    lastAccountKey = currentAccountKey;
 
     // アカウント切り替えがなかった場合は通常の読み込み
     if (!accountSwitched) {
@@ -1817,6 +2058,7 @@ async function observe() {
     await ensureIdentityAccounts();
     const initialFingerprint = AccountIdentityHelper.getFingerprint();
     lastAccountFingerprint = initialFingerprint;
+    lastAccountKey = AccountIdentityHelper.getCompositeKey();
     accountInitialized = true;
     console.log("[GCX] Account initialized:", {
       fingerprint: initialFingerprint,
@@ -1826,27 +2068,37 @@ async function observe() {
       dbName: getStreamDbName(),
     });
 
-    // 🆕 初回起動時にOAuth認証を実行（認証画面を表示）
-    console.log("[GCX] 🔓 Requesting initial OAuth authentication...");
-    try {
-      // 古いトークンをクリアしてから認証
-      console.log("[GCX] 📞 Calling clearAllAuthTokens()...");
-      await clearAllAuthTokens();
-      console.log("[GCX] ✓ clearAllAuthTokens() completed");
+    const accountKey = AccountIdentityHelper.getCompositeKey();
+    const alreadyInitialized = await isAuthInitializedForKey(accountKey);
 
-      // トークンクリアが完全に反映されるまで少し待つ（学校アカウント対策）
-      console.log("[GCX] ⏳ Waiting for token cache to clear...");
-      await new Promise((resolve) => setTimeout(resolve, 1000)); // 1秒待機
-      console.log("[GCX] ✓ Token cache should be cleared now");
+    if (!alreadyInitialized) {
+      // 🆕 初回起動時にOAuth認証を実行（認証画面を表示）
+      console.log("[GCX] 🔓 Requesting initial OAuth authentication...");
+      try {
+        // 古いトークンをクリアしてから認証
+        console.log("[GCX] 📞 Calling clearAllAuthTokens()...");
+        await clearAllAuthTokens();
+        console.log("[GCX] ✓ clearAllAuthTokens() completed");
 
-      console.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
-      await forceOAuthAuthentication();
-      console.log("[GCX] ✓ Initial OAuth authentication successful");
-    } catch (authErr) {
-      console.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
-      console.error("[GCX] Error stack:", authErr.stack);
-      setTopbarPlaceholder(
-        "認証に失敗しました。更新ボタンをクリックしてください。"
+        // トークンクリアが完全に反映されるまで少し待つ（学校アカウント対策）
+        console.log("[GCX] ⏳ Waiting for token cache to clear...");
+        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1秒待機
+        console.log("[GCX] ✓ Token cache should be cleared now");
+
+        console.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
+        await forceOAuthAuthentication();
+        console.log("[GCX] ✓ Initial OAuth authentication successful");
+      } catch (authErr) {
+        console.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
+        console.error("[GCX] Error stack:", authErr.stack);
+        setTopbarPlaceholder(
+          "認証に失敗しました。更新ボタンをクリックしてください。"
+        );
+      }
+    } else {
+      console.log(
+        "[GCX] OAuth already initialized for account key:",
+        accountKey
       );
     }
   } catch (err) {

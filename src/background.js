@@ -5,6 +5,78 @@ const CLASSROOM_BASE = "https://classroom.googleapis.com/v1";
 // Restrict proxy fetches to Classroom API only (must match manifest host_permissions)
 const ALLOWED_API_HOSTS = new Set(["classroom.googleapis.com"]);
 const EMAIL_REGEX = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i;
+const CHANNEL_TOKEN_KEY = "gcxMessageChannelToken";
+const CHANNEL_TOKEN_LENGTH = 64;
+
+let channelTokenCache = null;
+let channelTokenLoading = null;
+
+function generateChannelToken() {
+  const array = new Uint8Array(CHANNEL_TOKEN_LENGTH / 2);
+  crypto.getRandomValues(array);
+  return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
+    ""
+  );
+}
+
+async function ensureChannelToken() {
+  if (channelTokenCache) return channelTokenCache;
+  if (channelTokenLoading) return channelTokenLoading;
+
+  channelTokenLoading = (async () => {
+    const token = await new Promise((resolve, reject) => {
+      try {
+        chrome.storage.local.get([CHANNEL_TOKEN_KEY], (items) => {
+          if (chrome.runtime.lastError) {
+            reject(chrome.runtime.lastError);
+            return;
+          }
+
+          let existing = items?.[CHANNEL_TOKEN_KEY];
+          if (
+            typeof existing === "string" &&
+            existing.length >= CHANNEL_TOKEN_LENGTH
+          ) {
+            resolve(existing);
+            return;
+          }
+
+          const nextToken = generateChannelToken();
+          chrome.storage.local.set({ [CHANNEL_TOKEN_KEY]: nextToken }, () => {
+            if (chrome.runtime.lastError) {
+              reject(chrome.runtime.lastError);
+              return;
+            }
+            resolve(nextToken);
+          });
+        });
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    channelTokenCache = token;
+    return token;
+  })();
+
+  try {
+    return await channelTokenLoading;
+  } finally {
+    channelTokenLoading = null;
+  }
+}
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local") return;
+  if (Object.prototype.hasOwnProperty.call(changes, CHANNEL_TOKEN_KEY)) {
+    const next = changes[CHANNEL_TOKEN_KEY]?.newValue;
+    if (typeof next === "string" && next.length >= CHANNEL_TOKEN_LENGTH) {
+      channelTokenCache = next;
+    } else {
+      channelTokenCache = null;
+    }
+  }
+});
 
 async function listIdentityAccounts() {
   if (!chrome.identity?.getAccounts) return [];
@@ -379,12 +451,34 @@ async function googleFetch(request = {}, accountHint) {
     throw new Error(`Method not allowed: ${methodUpper}`);
   }
 
+  function buildHeadersWithAccount(tokenValue) {
+    const computedHeaders = {
+      ...(headers || {}),
+      Authorization: `Bearer ${tokenValue}`,
+    };
+    if (accountHint?.fingerprint) {
+      computedHeaders["X-GCX-Account-Fingerprint"] =
+        String(accountHint.fingerprint).slice(0, 64);
+    }
+    if (accountHint?.email) {
+      computedHeaders["X-GCX-Account-Email"] = String(
+        normalizeEmail(accountHint.email) || accountHint.email
+      );
+    }
+    if (accountHint?.accountKey) {
+      computedHeaders["X-GCX-Account-Key"] = String(
+        accountHint.accountKey
+      ).slice(0, 128);
+    }
+    return computedHeaders;
+  }
+
   // Try silent first, then one interactive retry if unauthorized
   try {
     const token = await getAuthToken({ interactive: false, accountHint });
     const res = await fetch(target, {
       method: "GET",
-      headers: { ...(headers || {}), Authorization: `Bearer ${token}` },
+      headers: buildHeadersWithAccount(token),
       // GET: no request body
       body: undefined,
     });
@@ -396,7 +490,7 @@ async function googleFetch(request = {}, accountHint) {
         const token2 = await getAuthToken({ interactive: true, accountHint });
         const res2 = await fetch(target, {
           method: "GET",
-          headers: { ...(headers || {}), Authorization: `Bearer ${token2}` },
+          headers: buildHeadersWithAccount(token2),
           body: undefined,
         });
         return res2;
@@ -408,7 +502,7 @@ async function googleFetch(request = {}, accountHint) {
     const token = await getAuthToken({ interactive: true, accountHint });
     return fetch(target, {
       method: "GET",
-      headers: { ...(headers || {}), Authorization: `Bearer ${token}` },
+      headers: buildHeadersWithAccount(token),
       body: undefined,
     });
   }
@@ -435,6 +529,42 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       // Only accept messages from our own extension
       if (sender && sender.id && sender.id !== chrome.runtime.id) {
         sendResponse({ ok: false, error: "Invalid sender" });
+        return;
+      }
+
+      if (msg.type === "GCX_GET_CHANNEL_TOKEN") {
+        try {
+          const token = await ensureChannelToken();
+          sendResponse({
+            ok: true,
+            channelToken: token,
+            extensionId: chrome.runtime.id,
+          });
+        } catch (error) {
+          console.error("[GCX] GET_CHANNEL_TOKEN error:", error);
+          sendResponse({
+            ok: false,
+            error: String((error && error.message) || error),
+          });
+        }
+        return;
+      }
+
+      let channelToken;
+      try {
+        channelToken = await ensureChannelToken();
+      } catch (error) {
+        console.error("[GCX] Channel token unavailable", error);
+        sendResponse({
+          ok: false,
+          error: "Channel token unavailable",
+        });
+        return;
+      }
+
+      if (msg.channelToken !== channelToken) {
+        console.warn("[GCX] Rejected message with invalid channel token");
+        sendResponse({ ok: false, error: "Invalid channel token" });
         return;
       }
 
