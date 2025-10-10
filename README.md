@@ -259,4 +259,4 @@ TBD
 OAuthが何度も出るし、アカウントは切り替えられないし、getAuthTokenもlanchWebauthFlowも自分には駄目でした。３日こればっかやってたんで諦めます。
 
 
-＃　未完成！  
+＃ 未完成！  
