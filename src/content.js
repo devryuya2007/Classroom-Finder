@@ -46,6 +46,14 @@ const LOGIN_ERROR_KEYWORDS = [
 
 const CHANNEL_TOKEN_KEY = "gcxMessageChannelToken";
 const CHANNEL_TOKEN_LENGTH = 64;
+
+const gcxConsole = {
+  log: () => {},
+  info: () => {},
+  debug: () => {},
+  warn: (...args) => globalThis.console.warn(...args),
+  error: (...args) => globalThis.console.error(...args),
+};
 const AUTH_INIT_STATE_KEY = "gcxAuthInitStateV1";
 
 let identityAccounts = [];
@@ -98,7 +106,7 @@ function requestChannelTokenFromBackground() {
         }
         if (!res?.ok || !isValidChannelToken(res.channelToken)) {
           reject(
-            new Error(res?.error || "Failed to obtain channel token from SW")
+            new Error(res?.error || "Failed to obtain channel token from SW"),
           );
           return;
         }
@@ -138,9 +146,9 @@ async function readAuthInitState() {
     try {
       chrome.storage.local.get([AUTH_INIT_STATE_KEY], (items) => {
         if (chrome.runtime.lastError) {
-          console.debug(
+          gcxConsole.debug(
             "[GCX] readAuthInitState failed",
-            chrome.runtime.lastError.message
+            chrome.runtime.lastError.message,
           );
           resolve({});
           return;
@@ -153,7 +161,7 @@ async function readAuthInitState() {
         }
       });
     } catch (err) {
-      console.debug("[GCX] readAuthInitState threw", err);
+      gcxConsole.debug("[GCX] readAuthInitState threw", err);
       resolve({});
     }
   });
@@ -162,20 +170,17 @@ async function readAuthInitState() {
 async function writeAuthInitState(state) {
   return new Promise((resolve) => {
     try {
-      chrome.storage.local.set(
-        { [AUTH_INIT_STATE_KEY]: state },
-        () => {
-          if (chrome.runtime.lastError) {
-            console.debug(
-              "[GCX] writeAuthInitState failed",
-              chrome.runtime.lastError.message
-            );
-          }
-          resolve();
+      chrome.storage.local.set({ [AUTH_INIT_STATE_KEY]: state }, () => {
+        if (chrome.runtime.lastError) {
+          gcxConsole.debug(
+            "[GCX] writeAuthInitState failed",
+            chrome.runtime.lastError.message,
+          );
         }
-      );
+        resolve();
+      });
     } catch (err) {
-      console.debug("[GCX] writeAuthInitState threw", err);
+      gcxConsole.debug("[GCX] writeAuthInitState threw", err);
       resolve();
     }
   });
@@ -193,7 +198,7 @@ async function markAuthInitialized(accountKey) {
   if (state[accountKey]) return;
   state[accountKey] = Date.now();
   await writeAuthInitState(state);
-  console.log("[GCX] ✓ Recorded OAuth initialization for", accountKey);
+  gcxConsole.log("[GCX] ✓ Recorded OAuth initialization for", accountKey);
 }
 
 async function clearAuthInitialized(accountKey) {
@@ -202,7 +207,7 @@ async function clearAuthInitialized(accountKey) {
   if (!state[accountKey]) return;
   delete state[accountKey];
   await writeAuthInitState(state);
-  console.log("[GCX] ℹ️ Cleared OAuth initialization flag for", accountKey);
+  gcxConsole.log("[GCX] ℹ️ Cleared OAuth initialization flag for", accountKey);
 }
 
 // Service Workerが起動していることを確認
@@ -211,15 +216,13 @@ async function ensureServiceWorkerReady() {
   for (let i = 0; i < maxRetries; i++) {
     try {
       // 初回のみログ表示
-      if (i === 0) {
-        console.log("[GCX] 🏓 Checking Service Worker...");
-      }
+      if (i === 0) gcxConsole.log("[GCX] 🏓 Checking Service Worker...");
 
-      let channelToken;
+      let channelToken; 
       try {
         channelToken = await ensureChannelToken();
       } catch (error) {
-        console.error("[GCX] ⚠️ Failed to obtain channel token", error);
+        gcxConsole.error("[GCX] ⚠️ Failed to obtain channel token", error);
         const fallbackDelay = 500 * Math.pow(2, i);
         await new Promise((resolve) => setTimeout(resolve, fallbackDelay));
         continue;
@@ -245,11 +248,11 @@ async function ensureServiceWorkerReady() {
                 errorMsg.includes("Extension context invalidated") ||
                 errorMsg.includes("Receiving end does not exist")
               ) {
-                console.error(
-                  "[GCX] ❌ Extension was reloaded. Please reload this page!"
+                gcxConsole.error(
+                  "[GCX] ❌ Extension was reloaded. Please reload this page!",
                 );
                 setTopbarPlaceholder(
-                  "⚠️ 拡張機能が更新されました。ページを再読み込みしてください。"
+                  "⚠️ 拡張機能が更新されました。ページを再読み込みしてください。",
                 );
               }
               resolve(false);
@@ -260,22 +263,22 @@ async function ensureServiceWorkerReady() {
             ) {
               // 初回のみ成功ログ表示
               if (i === 0) {
-                console.log("[GCX] ✓ Service Worker ready");
+                gcxConsole.log("[GCX] ✓ Service Worker ready");
               }
               resolve(true);
             } else if (response?.pong) {
               // 異なる拡張機能からの応答（初回のみ警告）
               if (i === 0) {
-                console.warn(
-                  "[GCX] ⚠️ Response from different extension, retrying..."
+                gcxConsole.warn(
+                  "[GCX] ⚠️ Response from different extension, retrying...",
                 );
               }
               resolve(false);
             } else {
-              console.log("[GCX] ⚠️ Unexpected response:", response);
+              gcxConsole.log("[GCX] ⚠️ Unexpected response:", response);
               resolve(false);
             }
-          }
+          },
         );
       });
 
@@ -283,20 +286,20 @@ async function ensureServiceWorkerReady() {
 
       // 待機時間を指数的に増やす (500ms, 1000ms, 2000ms, 4000ms...)
       const delay = 500 * Math.pow(2, i);
-      console.log(`[GCX]    Waiting ${delay}ms before retry...`);
+      gcxConsole.log(`[GCX]    Waiting ${delay}ms before retry...`);
       await new Promise((resolve) => setTimeout(resolve, delay));
     } catch (err) {
-      console.log("[GCX] ⚠️ Service Worker ping error:", err);
+      gcxConsole.log("[GCX] ⚠️ Service Worker ping error:", err);
     }
   }
 
-  console.error(
+  gcxConsole.error(
     "[GCX] ❌ Service Worker did not respond after",
     maxRetries,
-    "retries"
+    "retries",
   );
   setTopbarPlaceholder(
-    "⚠️ Service Workerに接続できません。ページを再読み込みしてください。"
+    "⚠️ Service Workerに接続できません。ページを再読み込みしてください。",
   );
   return false;
 }
@@ -308,7 +311,7 @@ async function ensureIdentityAccounts() {
   try {
     channelToken = await ensureChannelToken();
   } catch (err) {
-    console.warn("[GCX] Failed to obtain channel token for identity list", err);
+    gcxConsole.warn("[GCX] Failed to obtain channel token for identity list", err);
     return identityAccounts;
   }
 
@@ -334,14 +337,14 @@ async function ensureIdentityAccounts() {
             return;
           }
           resolve(res.accounts);
-        }
+        },
       );
     });
     if (Array.isArray(accounts)) {
       identityAccounts = accounts;
     }
   } catch (err) {
-    console.debug("[GCX] failed to load identity accounts", err);
+    gcxConsole.debug("[GCX] failed to load identity accounts", err);
   }
   return identityAccounts;
 }
@@ -374,8 +377,8 @@ function ensureStyles() {
         existing instanceof HTMLLinkElement
           ? existing.getAttribute("href")
           : existing instanceof HTMLStyleElement
-          ? existing.dataset.origin
-          : null;
+            ? existing.dataset.origin
+            : null;
       if (current === href) return;
       existing.remove();
     }
@@ -399,16 +402,16 @@ function ensureStyles() {
       .catch((error) => {
         // CSSの読み込み失敗は致命的ではないため、警告のみ出力
         // UIの基本機能は動作し、スタイルが適用されないだけ
-        console.debug(
+        gcxConsole.debug(
           "[GCX] Stylesheet load failed (non-critical):",
-          error.message || error
+          error.message || error,
         );
         // 失敗したstyleタグは残しておく（空のスタイルでも問題なし）
       });
   } catch (error) {
     // getExtensionURL が失敗した場合も無視（UIは動作する）
-    console.debug(
-      "[GCX] Cannot load styles (non-critical), UI will still work"
+    gcxConsole.debug(
+      "[GCX] Cannot load styles (non-critical), UI will still work",
     );
   }
 }
@@ -422,14 +425,14 @@ async function clearAllAuthTokens() {
   try {
     await clearAuthInitialized(AccountIdentityHelper.getCompositeKey());
   } catch (err) {
-    console.debug("[GCX] clearAuthInitialized skipped", err);
+    gcxConsole.debug("[GCX] clearAuthInitialized skipped", err);
   }
 
   let channelToken;
   try {
     channelToken = await ensureChannelToken();
   } catch (err) {
-    console.warn("[GCX] Failed to obtain channel token for clear tokens", err);
+    gcxConsole.warn("[GCX] Failed to obtain channel token for clear tokens", err);
     return;
   }
 
@@ -446,17 +449,17 @@ async function clearAllAuthTokens() {
 
           const runtimeError = chrome.runtime.lastError;
           if (runtimeError) {
-            console.warn("[GCX] Failed to clear tokens:", runtimeError.message);
+            gcxConsole.warn("[GCX] Failed to clear tokens:", runtimeError.message);
             resolve(); // エラーでも続行
             return;
           }
-          console.log("[GCX] ✓ All cached tokens cleared");
+          gcxConsole.log("[GCX] ✓ All cached tokens cleared");
           resolve();
-        }
+        },
       );
     } catch (err) {
       clearTimeout(timeoutId);
-      console.warn("[GCX] Clear tokens error:", err);
+      gcxConsole.warn("[GCX] Clear tokens error:", err);
       resolve(); // エラーでも続行
     }
   });
@@ -470,14 +473,14 @@ async function forceOAuthAuthentication() {
   await ensureIdentityAccounts();
   const accountHint = getAccountHint();
 
-  console.log("[GCX] Forcing OAuth authentication for account:", accountHint);
+  gcxConsole.log("[GCX] Forcing OAuth authentication for account:", accountHint);
 
   let channelToken;
   try {
     channelToken = await ensureChannelToken();
   } catch (err) {
     throw new Error(
-      `Failed to obtain channel token for OAuth authentication: ${err?.message || err}`
+      `Failed to obtain channel token for OAuth authentication: ${err?.message || err}`,
     );
   }
 
@@ -500,9 +503,9 @@ async function forceOAuthAuthentication() {
 
           const runtimeError = chrome.runtime.lastError;
           if (runtimeError) {
-            console.error(
+            gcxConsole.error(
               "[GCX] OAuth authentication failed:",
-              runtimeError.message
+              runtimeError.message,
             );
             reject(new Error(runtimeError.message));
             return;
@@ -523,24 +526,21 @@ async function forceOAuthAuthentication() {
             reject(new Error("Account mismatch detected after OAuth"));
             return;
           }
-          if (
-            responseAccountKey &&
-            responseAccountKey !== expectedAccountKey
-          ) {
+          if (responseAccountKey && responseAccountKey !== expectedAccountKey) {
             reject(new Error("Account key mismatch after OAuth"));
             return;
           }
-          console.log("[GCX] ✓ OAuth authentication successful");
+          gcxConsole.log("[GCX] ✓ OAuth authentication successful");
           markAuthInitialized(AccountIdentityHelper.getCompositeKey()).catch(
             (err) => {
-              console.debug(
+              gcxConsole.debug(
                 "[GCX] markAuthInitialized failed (non-critical)",
-                err
+                err,
               );
-            }
+            },
           );
           resolve(res.token);
-        }
+        },
       );
     } catch (err) {
       clearTimeout(timeoutId);
@@ -563,7 +563,7 @@ async function bgFetch(request, attempt = 0) {
     channelToken = await ensureChannelToken();
   } catch (err) {
     throw new Error(
-      `Failed to obtain channel token for fetch: ${err?.message || err}`
+      `Failed to obtain channel token for fetch: ${err?.message || err}`,
     );
   }
 
@@ -588,10 +588,10 @@ async function bgFetch(request, attempt = 0) {
               if (attempt < 2) {
                 // 3回ではなく2回のリトライに制限
                 const backoffMs = 500 * Math.pow(2, attempt);
-                console.warn(
+                gcxConsole.warn(
                   `[GCX] Extension context invalidated (retry ${
                     attempt + 1
-                  }/2 after ${backoffMs}ms)`
+                  }/2 after ${backoffMs}ms)`,
                 );
                 setTimeout(() => {
                   bgFetch(request, attempt + 1)
@@ -603,8 +603,8 @@ async function bgFetch(request, attempt = 0) {
               // リトライ失敗: ページリロードを促すエラー
               reject(
                 new Error(
-                  "Extension context invalidated. Please reload the page."
-                )
+                  "Extension context invalidated. Please reload the page.",
+                ),
               );
               return;
             }
@@ -617,8 +617,8 @@ async function bgFetch(request, attempt = 0) {
                 message.includes("message port closed"))
             ) {
               const backoffMs = 500 * Math.pow(2, attempt); // 指数バックオフ: 500ms, 1s, 2s
-              console.warn(
-                `[GCX] ${message} (retry ${attempt + 1}/3 after ${backoffMs}ms)`
+              gcxConsole.warn(
+                `[GCX] ${message} (retry ${attempt + 1}/3 after ${backoffMs}ms)`,
               );
               setTimeout(() => {
                 bgFetch(request, attempt + 1)
@@ -634,10 +634,10 @@ async function bgFetch(request, attempt = 0) {
           if (!res) {
             if (attempt < 3) {
               const backoffMs = 500 * Math.pow(2, attempt);
-              console.warn(
+              gcxConsole.warn(
                 `[GCX] No response (retry ${
                   attempt + 1
-                }/${3} after ${backoffMs}ms)`
+                }/${3} after ${backoffMs}ms)`,
               );
               setTimeout(() => {
                 bgFetch(request, attempt + 1)
@@ -661,10 +661,7 @@ async function bgFetch(request, attempt = 0) {
           // ここで弾いておけば、別アカウントのデータが UI に紛れ込むことはないよ。
           const responseAccountKey = res.account?.accountKey || null;
           const responseFingerprint = res.account?.fingerprint || null;
-          if (
-            responseAccountKey &&
-            responseAccountKey !== expectedAccountKey
-          ) {
+          if (responseAccountKey && responseAccountKey !== expectedAccountKey) {
             reject(new Error("Account mismatch detected for response"));
             return;
           }
@@ -677,7 +674,7 @@ async function bgFetch(request, attempt = 0) {
           }
 
           resolve(res.data);
-        }
+        },
       );
     } catch (err) {
       clearTimeout(timeoutId);
@@ -722,7 +719,7 @@ function mapAnnouncementToPost(ann, course, index) {
   const courseId = normalizeWhitespace(course?.id || "");
   const courseName = teacherName;
   const postedAtRaw = normalizeWhitespace(
-    ann.updateTime || ann.creationTime || ""
+    ann.updateTime || ann.creationTime || "",
   );
   const formattedPostedAt = formatPostedAtForJapan(postedAtRaw);
   const bodyText = normalizeWhitespace(ann.text || "");
@@ -742,7 +739,7 @@ function mapAnnouncementToPost(ann, course, index) {
           },
           body: bodyText,
         },
-        index
+        index,
       ),
     courseId,
     courseName,
@@ -782,11 +779,11 @@ async function fetchAllAnnouncementsPosts() {
           posts.push(mapAnnouncementToPost(ann, course, counter));
         }
       } catch (err) {
-        console.warn(
+        gcxConsole.warn(
           `[GCX] announcements fetch failed for course ${course?.id} (${
             course?.name || "unknown"
           })`,
-          err.message || err
+          err.message || err,
         );
         // エラーが発生してもスキップして次のコースへ続行
       }
@@ -794,7 +791,7 @@ async function fetchAllAnnouncementsPosts() {
   }
 
   await Promise.all(
-    Array.from({ length: Math.min(concurrency, courses.length) }, worker)
+    Array.from({ length: Math.min(concurrency, courses.length) }, worker),
   );
   return posts;
 }
@@ -977,8 +974,8 @@ function collectStreamElements(root = document) {
     ];
 
     if (fallback.length && !domFallbackLogged) {
-      console.warn(
-        "[GCX] Fallback selector engaged. Classroom DOM might have changed."
+      gcxConsole.warn(
+        "[GCX] Fallback selector engaged. Classroom DOM might have changed.",
       );
       domFallbackLogged = true;
     }
@@ -1058,8 +1055,8 @@ function deriveStreamId({
   const seed = seedParts.join("|");
 
   if (!idFallbackLogged) {
-    console.warn(
-      "[GCX] Stream ID fallback used. Check selector coverage in content.js."
+    gcxConsole.warn(
+      "[GCX] Stream ID fallback used. Check selector coverage in content.js.",
     );
     idFallbackLogged = true;
   }
@@ -1102,7 +1099,7 @@ class AccountIdentityHelper {
         return `u${pathMatch[1]}`;
       }
     } catch (err) {
-      console.debug("[GCX] account key detection failed", err);
+      gcxConsole.debug("[GCX] account key detection failed", err);
     }
     return "u0";
   }
@@ -1188,13 +1185,13 @@ function getClassroomGaiaId() {
       const value = data[key];
       if (typeof value === "string" && /^\d{5,}$/.test(value)) {
         // 見つかった時のみログ表示
-        console.log("[GCX] ✓ Found GAIA ID");
+        gcxConsole.log("[GCX] ✓ Found GAIA ID");
         return value;
       }
     }
     for (const [key, value] of Object.entries(data)) {
       if (typeof value === "string" && /^\d{5,}$/.test(value)) {
-        console.log("[GCX] ✓ Found GAIA ID");
+        gcxConsole.log("[GCX] ✓ Found GAIA ID");
         return value;
       }
     }
@@ -1202,7 +1199,7 @@ function getClassroomGaiaId() {
   const metaId = document.querySelector('meta[name="og-profile-id"]');
   const metaValue = metaId?.getAttribute("content");
   if (metaValue && /^\d{5,}$/.test(metaValue.trim())) {
-    console.log("[GCX] ✓ Found GAIA ID in meta tag");
+    gcxConsole.log("[GCX] ✓ Found GAIA ID in meta tag");
     return metaValue.trim();
   }
   // GAIA IDが見つからない場合は通常の動作（学校アカウント等で正常）
@@ -1293,7 +1290,7 @@ async function persistStreamData(posts = []) {
       posts.forEach((post, index) => {
         const streamId = ensureStableStreamId(post, index + 1);
         if (!streamId) {
-          console.warn("[GCX] skip store: missing fallback streamId", post);
+          gcxConsole.warn("[GCX] skip store: missing fallback streamId", post);
           return;
         }
         const record = {
@@ -1306,8 +1303,8 @@ async function persistStreamData(posts = []) {
         stored.push(record);
       });
       if (!stored.length) {
-        console.warn(
-          "[GCX] No posts persisted. Check selector / parser logic."
+        gcxConsole.warn(
+          "[GCX] No posts persisted. Check selector / parser logic.",
         );
       }
       tx.oncomplete = () => {
@@ -1321,8 +1318,8 @@ async function persistStreamData(posts = []) {
       tx.onabort = () => {
         reject(new Error("Transaction aborted"));
         db.close();
-        console.log(
-          "A transaction is aborted for reasons other than an error."
+        gcxConsole.log(
+          "A transaction is aborted for reasons other than an error.",
         );
       };
     };
@@ -1366,7 +1363,7 @@ async function loadStreamPostsFromDb() {
             alternateLink: normalizeWhitespace(post?.alternateLink || ""),
             courseId: normalizeWhitespace(post?.courseId || ""),
             courseName: normalizeWhitespace(
-              post?.courseName || post?.teacherName || ""
+              post?.courseName || post?.teacherName || "",
             ),
           };
         });
@@ -1461,8 +1458,8 @@ async function removeStreamPostsByIds(ids = []) {
     new Set(
       toArray(ids)
         .map((id) => normalizeStreamId(id))
-        .filter(Boolean)
-    )
+        .filter(Boolean),
+    ),
   );
   if (!normalizedIds.length) {
     return 0;
@@ -1480,7 +1477,7 @@ async function removeStreamPostsByIds(ids = []) {
         try {
           store.delete(id);
         } catch (err) {
-          console.warn("[GCX] delete failed", { id, err });
+          gcxConsole.warn("[GCX] delete failed", { id, err });
         }
       });
 
@@ -1514,7 +1511,7 @@ function resetSearchResults() {
 // API 経由で最新を取り込み、差分だけ追加
 async function syncStreamPosts(options = {}) {
   if (!API_MODE) {
-    console.info("[GCX] API mode=false (disabled)");
+    gcxConsole.info("[GCX] API mode=false (disabled)");
     return;
   }
   if (syncInFlight) return;
@@ -1536,10 +1533,10 @@ async function syncStreamPosts(options = {}) {
       (lastAccountKey && lastAccountKey !== currentAccountKey);
 
     if (accountSwitched) {
-      console.log("[GCX] 🔄 Account switch detected!");
-      console.log("[GCX] Previous fingerprint:", lastAccountFingerprint);
-      console.log("[GCX] Current fingerprint:", currentFingerprint);
-      console.log("[GCX] Current account:", {
+      gcxConsole.log("[GCX] 🔄 Account switch detected!");
+      gcxConsole.log("[GCX] Previous fingerprint:", lastAccountFingerprint);
+      gcxConsole.log("[GCX] Current fingerprint:", currentFingerprint);
+      gcxConsole.log("[GCX] Current account:", {
         index: getAccountIndex(),
         gaiaId: getClassroomGaiaId(),
         email: getClassroomAccountEmail(),
@@ -1549,45 +1546,42 @@ async function syncStreamPosts(options = {}) {
       setTopbarPlaceholder("アカウント切り替えを検知しました...");
       try {
         // 1. 古いアカウントのトークンを完全にクリア
-        console.log("[GCX] 🗑️ Clearing old account's OAuth tokens...");
+        gcxConsole.log("[GCX] 🗑️ Clearing old account's OAuth tokens...");
         try {
           await clearAuthInitialized(currentAccountKey);
         } catch (err) {
-          console.debug(
-            "[GCX] clearAuthInitialized during switch failed",
-            err
-          );
+          gcxConsole.debug("[GCX] clearAuthInitialized during switch failed", err);
         }
         await clearAllAuthTokens();
-        console.log("[GCX] ✓ Old tokens cleared");
+        gcxConsole.log("[GCX] ✓ Old tokens cleared");
 
         // 2. 少し待機してトークンクリアが確実に反映されるようにする
         await new Promise((resolve) => setTimeout(resolve, 1000));
 
         // 3. 新しいアカウントでOAuth認証
-        console.log("[GCX] 🔓 Re-authenticating with new account...");
+        gcxConsole.log("[GCX] 🔓 Re-authenticating with new account...");
         await forceOAuthAuthentication();
-        console.log(
-          "[GCX] ✓ OAuth re-authentication completed after account switch"
+        gcxConsole.log(
+          "[GCX] ✓ OAuth re-authentication completed after account switch",
         );
       } catch (authErr) {
-        console.error("[GCX] OAuth re-authentication failed:", authErr);
+        gcxConsole.error("[GCX] OAuth re-authentication failed:", authErr);
         setTopbarPlaceholder("認証に失敗しました");
         throw authErr;
       }
 
       // 新しいアカウントのDBからデータを読み込み、Fuseを再初期化
-      console.log(
+      gcxConsole.log(
         "[GCX] 📂 Switching to new account's IndexedDB:",
-        getStreamDbName()
+        getStreamDbName(),
       );
       savedPosts = await loadStreamPostsFromDb();
       if (fuse) {
         fuse.setCollection(savedPosts);
-        console.log(
+        gcxConsole.log(
           "[GCX] ✓ Fuse re-initialized with",
           savedPosts.length,
-          "posts from new account"
+          "posts from new account",
         );
         // アカウント切り替え時は検索結果を即座に更新
         rerunLastQuery();
@@ -1618,7 +1612,7 @@ async function syncStreamPosts(options = {}) {
           dataChanged = true;
         }
       } catch (err) {
-        console.warn("[GCX] remove stream posts failed", err);
+        gcxConsole.warn("[GCX] remove stream posts failed", err);
       }
     }
 
@@ -1899,7 +1893,7 @@ function createTopbar() {
     (event) => {
       focusController.handleFocusOut(event);
     },
-    true
+    true,
   );
   input.addEventListener("input", onSearchInput);
 
@@ -1955,9 +1949,9 @@ function createTopbar() {
         // 古いトークンをクリアしてから再認証
         await clearAllAuthTokens();
         await forceOAuthAuthentication();
-        console.log("[GCX] OAuth re-authentication completed");
+        gcxConsole.log("[GCX] OAuth re-authentication completed");
       } catch (authErr) {
-        console.error("[GCX] OAuth re-authentication failed:", authErr);
+        gcxConsole.error("[GCX] OAuth re-authentication failed:", authErr);
         setTopbarPlaceholder("認証に失敗しました");
         throw authErr;
       }
@@ -1967,7 +1961,7 @@ function createTopbar() {
       await syncStreamPosts({ source: "manual" });
       setTopbarPlaceholder("");
     } catch (err) {
-      console.warn("[GCX] manual sync failed", err);
+      gcxConsole.warn("[GCX] manual sync failed", err);
       flashRefreshError(err);
     } finally {
       refreshBtn.classList.remove("is-spinning");
@@ -2008,7 +2002,7 @@ let accountInitialized = false;
 function checkTopbarPresence() {
   const existing = document.getElementById(TOPBAR_ID);
   if (!existing || !document.body.contains(existing)) {
-    console.debug("[GCX] Topbar missing, re-injecting");
+    gcxConsole.debug("[GCX] Topbar missing, re-injecting");
     ensureTopbar();
   }
 }
@@ -2025,7 +2019,7 @@ function setupTopbarObserver() {
           node.id === TOPBAR_ID ||
           (node.contains && node.contains(document.getElementById(TOPBAR_ID)))
         ) {
-          console.debug("[GCX] Topbar removed by DOM mutation, re-injecting");
+          gcxConsole.debug("[GCX] Topbar removed by DOM mutation, re-injecting");
           ensureTopbar();
           return;
         }
@@ -2060,13 +2054,13 @@ function setupAccountSwitchDetection() {
       const newIndex = newMatch ? newMatch[1] : "0";
 
       if (oldIndex !== newIndex) {
-        console.log("[GCX] 🔄 URL changed, account switch detected!");
-        console.log("[GCX] Old index:", oldIndex, "→ New index:", newIndex);
+        gcxConsole.log("[GCX] 🔄 URL changed, account switch detected!");
+        gcxConsole.log("[GCX] Old index:", oldIndex, "→ New index:", newIndex);
         lastPathname = currentPathname;
 
         // アカウント切り替えを検出したら即座に同期
         void syncStreamPosts({ source: "account-switch" }).catch((err) => {
-          console.error("[GCX] Account switch sync failed:", err);
+          gcxConsole.error("[GCX] Account switch sync failed:", err);
         });
       } else {
         lastPathname = currentPathname;
@@ -2100,7 +2094,7 @@ async function observe() {
     lastAccountFingerprint = initialFingerprint;
     lastAccountKey = AccountIdentityHelper.getCompositeKey();
     accountInitialized = true;
-    console.log("[GCX] Account initialized:", {
+    gcxConsole.log("[GCX] Account initialized:", {
       fingerprint: initialFingerprint,
       index: getAccountIndex(),
       gaiaId: getClassroomGaiaId(),
@@ -2113,36 +2107,36 @@ async function observe() {
 
     if (!alreadyInitialized) {
       // 🆕 初回起動時にOAuth認証を実行（認証画面を表示）
-      console.log("[GCX] 🔓 Requesting initial OAuth authentication...");
+      gcxConsole.log("[GCX] 🔓 Requesting initial OAuth authentication...");
       try {
         // 古いトークンをクリアしてから認証
-        console.log("[GCX] 📞 Calling clearAllAuthTokens()...");
+        gcxConsole.log("[GCX] 📞 Calling clearAllAuthTokens()...");
         await clearAllAuthTokens();
-        console.log("[GCX] ✓ clearAllAuthTokens() completed");
+        gcxConsole.log("[GCX] ✓ clearAllAuthTokens() completed");
 
         // トークンクリアが完全に反映されるまで少し待つ（学校アカウント対策）
-        console.log("[GCX] ⏳ Waiting for token cache to clear...");
+        gcxConsole.log("[GCX] ⏳ Waiting for token cache to clear...");
         await new Promise((resolve) => setTimeout(resolve, 1000)); // 1秒待機
-        console.log("[GCX] ✓ Token cache should be cleared now");
+        gcxConsole.log("[GCX] ✓ Token cache should be cleared now");
 
-        console.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
+        gcxConsole.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
         await forceOAuthAuthentication();
-        console.log("[GCX] ✓ Initial OAuth authentication successful");
+        gcxConsole.log("[GCX] ✓ Initial OAuth authentication successful");
       } catch (authErr) {
-        console.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
-        console.error("[GCX] Error stack:", authErr.stack);
+        gcxConsole.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
+        gcxConsole.error("[GCX] Error stack:", authErr.stack);
         setTopbarPlaceholder(
-          "認証に失敗しました。更新ボタンをクリックしてください。"
+          "認証に失敗しました。更新ボタンをクリックしてください。",
         );
       }
     } else {
-      console.log(
+      gcxConsole.log(
         "[GCX] OAuth already initialized for account key:",
-        accountKey
+        accountKey,
       );
     }
   } catch (err) {
-    console.warn("[GCX] Failed to initialize account info", err);
+    gcxConsole.warn("[GCX] Failed to initialize account info", err);
   }
 
   // 初回同期
@@ -2153,18 +2147,18 @@ async function observe() {
       err.message &&
       err.message.includes("Extension context invalidated")
     ) {
-      console.warn(
-        "[GCX] Extension context invalidated. Please reload the page."
+      gcxConsole.warn(
+        "[GCX] Extension context invalidated. Please reload the page.",
       );
       setTopbarPlaceholder(
-        "拡張機能が更新されました。ページをリロードしてください。"
+        "拡張機能が更新されました。ページをリロードしてください。",
       );
       return;
     }
 
-    console.warn(
+    gcxConsole.warn(
       "[GCX] Periodic fetch failed. API mode=false とみなします",
-      err
+      err,
     );
     flashRefreshError(err);
   });
@@ -2182,18 +2176,18 @@ async function observe() {
           err.message &&
           err.message.includes("Extension context invalidated")
         ) {
-          console.warn(
-            "[GCX] Extension context invalidated. Please reload the page."
+          gcxConsole.warn(
+            "[GCX] Extension context invalidated. Please reload the page.",
           );
           setTopbarPlaceholder(
-            "拡張機能が更新されました。ページをリロードしてください。"
+            "拡張機能が更新されました。ページをリロードしてください。",
           );
           return;
         }
 
-        console.warn(
+        gcxConsole.warn(
           "[GCX] Periodic fetch failed. API mode=false とみなします",
-          err
+          err,
         );
         flashRefreshError(err);
       });
@@ -2229,7 +2223,7 @@ async function initFuse() {
     const posts = await loadStreamPostsFromDb();
     fuse = new window.Fuse(posts, options);
   } catch (error) {
-    console.error("[GCX] Failed to init fuse", error);
+    gcxConsole.error("[GCX] Failed to init fuse", error);
     fuse = null;
   }
 }
@@ -2517,7 +2511,7 @@ function findStreamElementByStreamId(streamId) {
       const node = document.querySelector(selector);
       if (!node) continue;
       const container = node.closest(
-        'c-wiz[jsmodel*="N2jS6b"], article[jsmodel*="N2jS6b"], li[jsmodel*="N2jS6b"], c-wiz[role="listitem"], article[role="listitem"], li[role="listitem"]'
+        'c-wiz[jsmodel*="N2jS6b"], article[jsmodel*="N2jS6b"], li[jsmodel*="N2jS6b"], c-wiz[role="listitem"], article[role="listitem"], li[role="listitem"]',
       );
       return container || node;
     } catch (error) {
@@ -2559,15 +2553,15 @@ async function handleSuggestionActivation(item) {
     try {
       url = new URL(href, window.location.href);
     } catch (err) {
-      console.warn("[GCX] Invalid navigation target", { href, err });
+      gcxConsole.warn("[GCX] Invalid navigation target", { href, err });
       return false;
     }
     if (url.protocol !== "https:") {
-      console.warn("[GCX] Blocked non-https navigation", { href });
+      gcxConsole.warn("[GCX] Blocked non-https navigation", { href });
       return false;
     }
     if (!ALLOWED_NAV_HOSTS.has(url.hostname)) {
-      console.warn("[GCX] Blocked navigation host", {
+      gcxConsole.warn("[GCX] Blocked navigation host", {
         href,
         host: url.hostname,
       });
@@ -2585,7 +2579,7 @@ async function handleSuggestionActivation(item) {
     try {
       const data = await bgFetch({
         path: `/courses/${encodeURIComponent(
-          courseId
+          courseId,
         )}/announcements/${encodeURIComponent(apiId)}`,
       });
       const fetchedLink = normalizeWhitespace(data?.alternateLink || "");
@@ -2593,7 +2587,7 @@ async function handleSuggestionActivation(item) {
         return;
       }
     } catch (error) {
-      console.warn("[GCX] Failed to resolve alternateLink via API", {
+      gcxConsole.warn("[GCX] Failed to resolve alternateLink via API", {
         courseId,
         apiId,
         error,
@@ -2601,7 +2595,7 @@ async function handleSuggestionActivation(item) {
     }
   }
 
-  console.error("[GCX] No navigation target resolved via API", {
+  gcxConsole.error("[GCX] No navigation target resolved via API", {
     courseId,
     apiId,
     alternateLink,
@@ -2647,7 +2641,7 @@ function createSuggestionItem(entry) {
     teacher,
     item.teacherName || "(不明)",
     matches,
-    "teacherName"
+    "teacherName",
   );
   headerMain.appendChild(teacher);
 
@@ -2670,7 +2664,7 @@ function createSuggestionItem(entry) {
     time,
     item.postedAt?.text || "",
     matches,
-    "postedAt.text"
+    "postedAt.text",
   );
 
   header.append(headerMain, time);
@@ -2756,9 +2750,9 @@ function rerunLastQuery() {
 // コンテンツスクリプト全体の初期化ルーチン
 async function init() {
   // ★最初にService Workerを起動★
-  console.log("[GCX] 🚀 Waking up Service Worker...");
+  gcxConsole.log("[GCX] 🚀 Waking up Service Worker...");
   await ensureServiceWorkerReady();
-  console.log("[GCX] ✓ Service Worker is active");
+  gcxConsole.log("[GCX] ✓ Service Worker is active");
 
   ensureTopbar();
   await loadLocalLibs();
@@ -2766,18 +2760,18 @@ async function init() {
     try {
       await syncStreamPosts();
     } catch (error) {
-      console.warn(
+      gcxConsole.warn(
         "[GCX] Initial fetch failed. API mode=false とみなします",
-        error
+        error,
       );
       flashRefreshError(error);
     }
   } else {
-    console.info("[GCX] API mode=false (disabled)");
+    gcxConsole.info("[GCX] API mode=false (disabled)");
   }
   await initFuse();
   observe();
-  console.debug("[GCX] search input injection initialized");
+  gcxConsole.debug("[GCX] search input injection initialized");
 }
 
 if (document.readyState === "loading") {

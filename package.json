@@ -9,8 +9,9 @@
   },
   "scripts": {
     "dev": "echo 'Load extension via chrome://extensions (unpacked)'",
-    "build": "echo 'No build step required. Optionally add Vite/Rollup.'",
-    "test": "node --test --experimental-test-coverage tests",
+    "build": "node scripts/build.mjs",
+    "clean": "rm -rf dist",
+    "test": "node --test --experimental-test-coverage tests/*.test.js",
     "lint": "echo 'ESLint not configured yet' && exit 0"
   },
   "dependencies": {
