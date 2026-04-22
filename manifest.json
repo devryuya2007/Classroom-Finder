@@ -33,8 +33,9 @@
   "background": {
     "service_worker": "src/background.js"
   },
+ 
   "oauth2": {
-    "client_id": "742269214393-96p819orcj7uug1rsrb91evmc43a7e64.apps.googleusercontent.com",
+    "client_id": "742269214393-lht4auqpvdlik0vupjklig5r51mh3ko2.apps.googleusercontent.com",
     "scopes": [
       "https://www.googleapis.com/auth/classroom.courses.readonly",
       "https://www.googleapis.com/auth/classroom.announcements.readonly"

@@ -11,8 +11,6 @@ const OAUTH2_CLIENT_ID = manifest?.oauth2?.client_id || null;
 const OAUTH2_SCOPES = Array.isArray(manifest?.oauth2?.scopes)
   ? [...manifest.oauth2.scopes]
   : [];
-const OAUTH_REDIRECT_URI =
-  "https://aapcholjhlbajmabbglcdhmblogbpgii.chromiumapp.org/";
 const OAUTH_SCOPE_HASH = (() => {
   const sorted = [...OAUTH2_SCOPES].sort();
   return createSimpleHash(sorted.join(" ") || "default-scope");
@@ -441,59 +439,6 @@ async function invalidateAllAccountTokens({ revoke = false } = {}) {
   gcxConsole.log("[GCX] ✓ All account tokens invalidated");
 }
 
-// launchWebAuthFlow で「アカウント選択 + consent」を必ず踏ませる補助関数。
-// 初心者メモ: ここで prompt=select_account consent を付けておかないと、
-// Chrome が前回のアカウントを勝手に再利用してしまうよ。
-async function runInteractiveConsentFlow({
-  accountHint,
-  resolvedAccount,
-  sessionKey,
-}) {
-  if (!OAUTH2_CLIENT_ID || !OAUTH2_SCOPES.length) return false;
-  const params = new URLSearchParams({
-    client_id: OAUTH2_CLIENT_ID,
-    redirect_uri: OAUTH_REDIRECT_URI,
-    response_type: "code",
-    access_type: "offline",
-    include_granted_scopes: "true",
-    prompt: "select_account consent",
-    scope: OAUTH2_SCOPES.join(" "),
-    state: `${ensureSessionKey(sessionKey)}:${Date.now()}`,
-  });
-  if (typeof accountHint?.index === "number") {
-    params.set("authuser", String(accountHint.index));
-  }
-  const emailHint = normalizeEmail(
-    accountHint?.email || resolvedAccount?.email || ""
-  );
-  if (emailHint) {
-    params.set("login_hint", emailHint);
-  }
-
-  const url = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  await new Promise((resolve, reject) => {
-    try {
-      chrome.identity.launchWebAuthFlow(
-        { url, interactive: true },
-        (redirectUrl) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          if (!redirectUrl) {
-            reject(new Error("Consent flow aborted"));
-            return;
-          }
-          resolve(redirectUrl);
-        }
-      );
-    } catch (err) {
-      reject(err);
-    }
-  });
-  return true;
-}
-
 async function getAuthToken({
   interactive = false,
   accountHint,
@@ -561,28 +506,9 @@ async function getAuthToken({
     throw new Error(sessionState.authBlockReason);
   }
 
-  let consentFlowCompleted = false;
-  if (interactive) {
-    try {
-      consentFlowCompleted = await runInteractiveConsentFlow({
-        accountHint,
-        resolvedAccount,
-        sessionKey: normalizedSessionKey,
-      });
-    } catch (error) {
-      const message = String((error && error.message) || error || "");
-      if (isPermanentOAuthConfigError(message)) {
-        sessionState.authBlockReason = `OAuth configuration error: ${message}`;
-      }
-      throw error;
-    }
-  }
-
   const token = await new Promise((resolve, reject) => {
     try {
-      const details = {
-        interactive: interactive && !consentFlowCompleted,
-      };
+      const details = { interactive };
       if (accountParam) {
         details.account = accountParam;
       }
@@ -996,8 +922,8 @@ gcxConsole.log("═════════════════════�
 gcxConsole.log("[GCX] background service worker loaded");
 gcxConsole.log("[GCX] Extension ID:", chrome.runtime.id);
 gcxConsole.log(
-  "[GCX] Required OAuth Redirect URI:",
-  OAUTH_REDIRECT_URI
+  "[GCX] Generated OAuth Redirect URI:",
+  chrome.identity.getRedirectURL()
 );
 gcxConsole.log("═══════════════════════════════════════");
 
