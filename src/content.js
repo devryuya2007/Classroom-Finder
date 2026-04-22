@@ -33,6 +33,8 @@ const PLACEHOLDER_DEFAULT = "クラス全体を検索…";
 const PLACEHOLDER_SYNC_ERROR = "同期に失敗しました";
 const PLACEHOLDER_LOGIN_REQUIRED = "Googleアカウントにログインしてください。";
 const PLACEHOLDER_RELOAD_REQUIRED = "ページをリロードしてください。";
+const PLACEHOLDER_ACCOUNT_MISMATCH =
+  "アカウントを確認してから再試行してください。";
 
 const RELOAD_ERROR_KEYWORDS = ["no response from background"];
 const LOGIN_ERROR_KEYWORDS = [
@@ -890,6 +892,9 @@ function resolveRefreshErrorPlaceholder(error) {
     return PLACEHOLDER_SYNC_ERROR;
   }
   const message = String(error?.message || error || "").toLowerCase();
+  if (isAccountMismatchError(error)) {
+    return PLACEHOLDER_ACCOUNT_MISMATCH;
+  }
   if (/(quota|ratelimit|too many|429)/.test(message)) {
     return "アクセスが多すぎます。しばらく待ってから再試行してください";
   }
@@ -900,6 +905,15 @@ function resolveRefreshErrorPlaceholder(error) {
     return PLACEHOLDER_LOGIN_REQUIRED;
   }
   return PLACEHOLDER_SYNC_ERROR;
+}
+
+function isAccountMismatchError(error) {
+  const message = String(error?.message || error || "").toLowerCase();
+  return (
+    message.includes("account mismatch") ||
+    message.includes("account key mismatch") ||
+    message.includes("fingerprint mismatch")
+  );
 }
 
 // エラー表示用スタイルを一定時間適用し、適切なメッセージを示す
@@ -1566,6 +1580,10 @@ async function syncStreamPosts(options = {}) {
         );
       } catch (authErr) {
         gcxConsole.error("[GCX] OAuth re-authentication failed:", authErr);
+        if (isAccountMismatchError(authErr)) {
+          setTopbarPlaceholder(PLACEHOLDER_ACCOUNT_MISMATCH);
+          return;
+        }
         setTopbarPlaceholder("認証に失敗しました");
         throw authErr;
       }
@@ -2109,25 +2127,19 @@ async function observe() {
       // 🆕 初回起動時にOAuth認証を実行（認証画面を表示）
       gcxConsole.log("[GCX] 🔓 Requesting initial OAuth authentication...");
       try {
-        // 古いトークンをクリアしてから認証
-        gcxConsole.log("[GCX] 📞 Calling clearAllAuthTokens()...");
-        await clearAllAuthTokens();
-        gcxConsole.log("[GCX] ✓ clearAllAuthTokens() completed");
-
-        // トークンクリアが完全に反映されるまで少し待つ（学校アカウント対策）
-        gcxConsole.log("[GCX] ⏳ Waiting for token cache to clear...");
-        await new Promise((resolve) => setTimeout(resolve, 1000)); // 1秒待機
-        gcxConsole.log("[GCX] ✓ Token cache should be cleared now");
-
         gcxConsole.log("[GCX] 📞 Calling forceOAuthAuthentication()...");
         await forceOAuthAuthentication();
         gcxConsole.log("[GCX] ✓ Initial OAuth authentication successful");
       } catch (authErr) {
         gcxConsole.error("[GCX] ❌ Initial OAuth authentication failed:", authErr);
         gcxConsole.error("[GCX] Error stack:", authErr.stack);
-        setTopbarPlaceholder(
-          "認証に失敗しました。更新ボタンをクリックしてください。",
-        );
+        if (isAccountMismatchError(authErr)) {
+          setTopbarPlaceholder(PLACEHOLDER_ACCOUNT_MISMATCH);
+        } else {
+          setTopbarPlaceholder(
+            "認証に失敗しました。更新ボタンをクリックしてください。",
+          );
+        }
       }
     } else {
       gcxConsole.log(
