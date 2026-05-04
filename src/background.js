@@ -1,11 +1,20 @@
 // Background service worker for Google OAuth + API fetch
 // Uses chrome.identity.getAuthToken (no client_secret) and proxies API calls.
 
-const CLASSROOM_BASE = "https://classroom.googleapis.com/v1";
-// Restrict proxy fetches to Classroom API only (must match manifest host_permissions)
-const ALLOWED_API_HOSTS = new Set(["classroom.googleapis.com"]);
-// OAuth 設定は manifest.json とリンクしているので、ここで読み込んでおく。
-// 初心者ポイント: manifest を変更したら、ここも自動で反映される仕組みだよ。
+import { gcxConsole, createSimpleHash } from "./modules/shared/utils.js";
+import { CLASSROOM_BASE, ALLOWED_API_HOSTS, getOAuthConfig } from "./modules/background/constants.js";
+import { ensureChannelToken, setupChannelTokenListener } from "./modules/background/channel.js";
+import { setupMessageListener } from "./modules/background/message-handler.js";
+import {
+  getAuthTokenSingleFlight,
+  invalidateAllAccountTokens,
+  invalidateAccountToken,
+} from "./modules/background/auth.js";
+import { clearAllCachedTokens } from "./modules/background/token-manager.js";
+import { listIdentityAccountsWithProfiles } from "./modules/background/account.js";
+import { googleFetch } from "./modules/background/api-proxy.js";
+
+// OAuth configuration from manifest
 const manifest = chrome.runtime.getManifest();
 const OAUTH2_CLIENT_ID = manifest?.oauth2?.client_id || null;
 const OAUTH2_SCOPES = Array.isArray(manifest?.oauth2?.scopes)
@@ -15,564 +24,66 @@ const OAUTH_SCOPE_HASH = (() => {
   const sorted = [...OAUTH2_SCOPES].sort();
   return createSimpleHash(sorted.join(" ") || "default-scope");
 })();
-const EMAIL_REGEX = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/i;
-const CHANNEL_TOKEN_KEY = "gcxMessageChannelToken";
-const CHANNEL_TOKEN_LENGTH = 64;
 
-const gcxConsole = {
-  log: () => {},
-  info: () => {},
-  debug: () => {},
-  warn: (...args) => globalThis.console.warn(...args),
-  error: (...args) => globalThis.console.error(...args),
-};
-
-let channelTokenCache = null;
-let channelTokenLoading = null;
-// タブ ID + アカウント ID + スコープごとにトークンを分けて保存する箱。
-// 「上書きして別人のデータが見える」事故をここでガードするよ。
+// Global state management
 const tokenCache = new Map();
-// セッション（タブ）ごとの状態管理。どの指紋/アカウントを握っているかを記録する。
 const sessionStateStore = new Map();
-// セッションごとの認証処理を1本化する（同時実行で認証画面が増殖するのを防ぐ）
 const authInFlightStore = new Map();
+let channelTokenCache = null;
 
-// 超シンプルなハッシュ関数（djb2 風）。scope の組み合わせを短いキーにする用途だよ。
-function createSimpleHash(input) {
-  let hash = 5381;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash * 33) ^ input.charCodeAt(i);
-  }
-  return (hash >>> 0).toString(36);
-}
-
-function ensureSessionKey(sessionKey) {
-  return sessionKey || "sw::global";
-}
-
-function ensureSessionState(sessionKey) {
-  const key = ensureSessionKey(sessionKey);
-  if (!sessionStateStore.has(key)) {
-    sessionStateStore.set(key, {
-      lastAccountId: null,
-      lastFingerprint: null,
-      hasActiveToken: false,
-      authBlockReason: null,
-    });
-  }
-  return sessionStateStore.get(key);
-}
-
-function resetSessionState(sessionKey) {
-  const state = ensureSessionState(sessionKey);
-  state.lastAccountId = null;
-  state.hasActiveToken = false;
-  state.authBlockReason = null;
-}
-
-function isPermanentOAuthConfigError(message) {
-  if (!message || typeof message !== "string") return false;
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("bad client id") ||
-    normalized.includes("redirect_uri_mismatch") ||
-    normalized.includes("invalid client") ||
-    normalized.includes("oauth2 client id")
-  );
-}
-
-function buildTokenStoreKey(sessionKey, accountId) {
-  const normalizedSession = ensureSessionKey(sessionKey);
-  const normalizedAccount = accountId || "default";
-  return `${normalizedSession}:${normalizedAccount}:${OAUTH_SCOPE_HASH}`;
-}
-
-function rememberToken(sessionKey, accountId, token) {
-  const key = buildTokenStoreKey(sessionKey, accountId);
-  tokenCache.set(key, {
-    token,
-    accountId: accountId || null,
-    sessionKey: ensureSessionKey(sessionKey),
-  });
-}
-
-function deleteTokenByValue(tokenValue) {
-  if (!tokenValue) return [];
-  const affectedSessions = new Set();
-  for (const [key, record] of tokenCache.entries()) {
-    if (record.token === tokenValue) {
-      tokenCache.delete(key);
-      affectedSessions.add(record.sessionKey);
-    }
-  }
-  return [...affectedSessions];
-}
-
-async function revokeAuthToken(token) {
-  if (!token) return;
-  const revokeUrl = `https://accounts.google.com/o/oauth2/revoke?token=${encodeURIComponent(
-    token
-  )}`;
-  try {
-    await fetch(revokeUrl, { method: "GET", mode: "cors" });
-  } catch (err) {
-    gcxConsole.debug("[GCX] Token revoke request failed", err);
-  }
-}
-
-async function removeCachedToken(token, { revoke = false } = {}) {
-  if (!token) return;
-  const sessions = deleteTokenByValue(token);
-  sessions.forEach((sessionKey) => {
-    resetSessionState(sessionKey);
-  });
-  await new Promise((resolve) => {
-    try {
-      chrome.identity.removeCachedAuthToken({ token }, () => {
-        resolve();
-      });
-    } catch (_err) {
-      resolve();
-    }
-  });
-  if (revoke) {
-    await revokeAuthToken(token);
-  }
-}
-
-async function invalidateTokensForAccountId(accountId, { revoke = false } = {}) {
-  if (!accountId) return;
-  const tokensToDelete = [];
-  for (const record of tokenCache.values()) {
-    if (record.accountId === accountId) {
-      tokensToDelete.push(record.token);
-    }
-  }
-  for (const token of tokensToDelete) {
-    await removeCachedToken(token, { revoke });
-  }
-}
-
-async function forgetTokensForSession(sessionKey, { revoke = false } = {}) {
-  const normalizedKey = ensureSessionKey(sessionKey);
-  const tokensToDelete = [];
-  for (const record of tokenCache.values()) {
-    if (record.sessionKey === normalizedKey) {
-      tokensToDelete.push(record.token);
-    }
-  }
-  for (const token of tokensToDelete) {
-    await removeCachedToken(token, { revoke });
-  }
-}
-
-function generateChannelToken() {
-  const array = new Uint8Array(CHANNEL_TOKEN_LENGTH / 2);
-  crypto.getRandomValues(array);
-  return Array.from(array, (byte) => byte.toString(16).padStart(2, "0")).join(
-    ""
-  );
-}
-
-async function ensureChannelToken() {
-  if (channelTokenCache) return channelTokenCache;
-  if (channelTokenLoading) return channelTokenLoading;
-
-  channelTokenLoading = (async () => {
-    const token = await new Promise((resolve, reject) => {
-      try {
-        chrome.storage.local.get([CHANNEL_TOKEN_KEY], (items) => {
-          if (chrome.runtime.lastError) {
-            reject(chrome.runtime.lastError);
-            return;
-          }
-
-          let existing = items?.[CHANNEL_TOKEN_KEY];
-          if (
-            typeof existing === "string" &&
-            existing.length >= CHANNEL_TOKEN_LENGTH
-          ) {
-            resolve(existing);
-            return;
-          }
-
-          const nextToken = generateChannelToken();
-          chrome.storage.local.set({ [CHANNEL_TOKEN_KEY]: nextToken }, () => {
-            if (chrome.runtime.lastError) {
-              reject(chrome.runtime.lastError);
-              return;
-            }
-            resolve(nextToken);
-          });
-        });
-      } catch (err) {
-        reject(err);
-      }
-    });
-
-    channelTokenCache = token;
-    return token;
-  })();
-
-  try {
-    return await channelTokenLoading;
-  } finally {
-    channelTokenLoading = null;
-  }
-}
-
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local") return;
-  if (Object.prototype.hasOwnProperty.call(changes, CHANNEL_TOKEN_KEY)) {
-    const next = changes[CHANNEL_TOKEN_KEY]?.newValue;
-    if (typeof next === "string" && next.length >= CHANNEL_TOKEN_LENGTH) {
-      channelTokenCache = next;
-    } else {
-      channelTokenCache = null;
-    }
-  }
+// Setup channel token listener for content script communication
+setupChannelTokenListener((token) => {
+  channelTokenCache = token;
 });
 
-async function listIdentityAccounts() {
-  if (!chrome.identity?.getAccounts) return [];
-  return new Promise((resolve) => {
+// Message handlers
+const messageHandlers = {
+  async GCX_CLEAR_TOKENS(msg, sender, sendResponse) {
+    gcxConsole.log("[GCX] 🧹 Clearing all cached tokens...");
     try {
-      chrome.identity.getAccounts((accounts) => {
-        if (chrome.runtime.lastError) {
-          gcxConsole.warn(
-            "[GCX] getAccounts failed",
-            chrome.runtime.lastError.message
-          );
-          resolve([]);
-          return;
-        }
-        if (Array.isArray(accounts)) {
-          resolve(accounts);
-        } else {
-          resolve([]);
-        }
+      await clearAllCachedTokens(tokenCache, sessionStateStore);
+      sendResponse({ ok: true });
+    } catch (error) {
+      gcxConsole.error("[GCX] CLEAR_TOKENS error:", error);
+      sendResponse({
+        ok: false,
+        error: String((error && error.message) || error),
       });
-    } catch (err) {
-      gcxConsole.warn("[GCX] getAccounts threw", err);
-      resolve([]);
     }
-  });
-}
+  },
 
-async function getProfileInfoForAccount(account) {
-  if (!account?.id)
-    return { id: account?.id || null, email: account?.email || null };
-  return new Promise((resolve) => {
+  async GCX_GOOGLE_GET_TOKEN(msg, sender, sendResponse) {
+    gcxConsole.log("[GCX] 🔐 GET_TOKEN request, interactive:", !!msg.interactive);
     try {
-      const details = { account: { id: account.id } };
-      chrome.identity.getProfileUserInfo(details, (info) => {
-        if (chrome.runtime.lastError) {
-          resolve({ id: account.id, email: account.email || null });
-          return;
+      const sessionKey = require("./modules/background/utils.js").deriveSessionKey(sender, msg.accountHint);
+      const tokenRecord = await getAuthTokenSingleFlight(
+        authInFlightStore,
+        tokenCache,
+        sessionStateStore,
+        CLASSROOM_BASE,
+        ALLOWED_API_HOSTS,
+        OAUTH_SCOPE_HASH,
+        {
+          interactive: !!msg.interactive,
+          accountHint: msg.accountHint,
+          sessionKey,
         }
-        resolve({
-          id: info?.id || account.id,
-          email: info?.email || account.email || null,
-        });
-      });
-    } catch (err) {
-      gcxConsole.debug("[GCX] getProfileUserInfo failed", err);
-      resolve({ id: account.id, email: account.email || null });
-    }
-  });
-}
-
-async function listIdentityAccountsWithProfiles() {
-  const accounts = await listIdentityAccounts();
-  const enriched = [];
-  for (const account of accounts) {
-    const profile = await getProfileInfoForAccount(account);
-    enriched.push({
-      id: profile.id || account.id || null,
-      email: profile.email || account.email || null,
-    });
-  }
-  return enriched;
-}
-
-function assertAllowedTarget(target) {
-  let url;
-  try {
-    url = new URL(target);
-  } catch (err) {
-    throw new Error(`Invalid URL: ${String(target)}`);
-  }
-  if (url.protocol !== "https:") {
-    throw new Error("Only HTTPS is allowed");
-  }
-  if (!ALLOWED_API_HOSTS.has(url.hostname)) {
-    throw new Error(`Host not allowed: ${url.hostname}`);
-  }
-  return url.toString();
-}
-
-function normalizeEmail(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  const match = trimmed.match(EMAIL_REGEX);
-  return match ? match[0].toLowerCase() : null;
-}
-
-async function resolveAccountFromHint(accountHint) {
-  const accounts = await listIdentityAccounts();
-  if (!accounts.length) {
-    gcxConsole.warn("[GCX] ⚠️ No accounts available in Identity API");
-    return { account: null, accounts };
-  }
-
-  gcxConsole.log("[GCX] 🔍 Resolving account from hint:", accountHint);
-  gcxConsole.log(
-    "[GCX] 📋 Available accounts:",
-    accounts.map((a) => ({ id: a.id, email: a.email }))
-  );
-
-  if (accountHint && typeof accountHint === "object") {
-    const { gaiaId, email, index } = accountHint;
-
-    // GAIA IDで検索
-    if (gaiaId) {
-      gcxConsole.log("[GCX] 🔎 Searching by gaiaId:", gaiaId);
-      const matchById = accounts.find((acc) => acc?.id === gaiaId);
-      if (matchById) {
-        gcxConsole.log("[GCX] ✓ Found account by gaiaId:", matchById.email);
-        return { account: matchById, accounts };
-      } else {
-        gcxConsole.warn("[GCX] ⚠️ No match found for gaiaId:", gaiaId);
-      }
-    } else {
-      gcxConsole.log("[GCX] ℹ️ No gaiaId provided in hint");
-    }
-
-    // メールアドレスで検索
-    const normalizedEmail = normalizeEmail(email);
-    if (normalizedEmail) {
-      gcxConsole.log("[GCX] 🔎 Searching by email:", normalizedEmail);
-      const matchByEmail = accounts.find(
-        (acc) => normalizeEmail(acc?.email) === normalizedEmail
       );
-      if (matchByEmail) {
-        gcxConsole.log("[GCX] ✓ Found account by email:", matchByEmail.email);
-        return { account: matchByEmail, accounts };
-      } else {
-        gcxConsole.warn("[GCX] ⚠️ No match found for email:", normalizedEmail);
-      }
-    } else {
-      gcxConsole.log("[GCX] ℹ️ No email provided in hint");
-    }
-
-    // インデックスで検索
-    if (typeof index === "number" && index >= 0 && index < accounts.length) {
       gcxConsole.log(
-        "[GCX] 🔎 Using account by index:",
-        index,
-        "->",
-        accounts[index]?.email || accounts[index]?.id
+        "[GCX] ✓ Token obtained, length:",
+        tokenRecord?.token?.length || 0
       );
-      return { account: accounts[index], accounts };
-    } else {
-      gcxConsole.warn(
-        "[GCX] ⚠️ Invalid index:",
-        index,
-        "accounts length:",
-        accounts.length
-      );
-    }
-  } else {
-    gcxConsole.warn("[GCX] ⚠️ accountHint is invalid:", typeof accountHint);
-  }
-
-  gcxConsole.warn("[GCX] ❌ Could not resolve account from hint, using default");
-  return { account: null, accounts };
-}
-
-// アカウント別のトークンを無効化
-async function invalidateAccountToken(account, { revoke = false } = {}) {
-  if (!account?.id) return;
-  try {
-    await invalidateTokensForAccountId(account.id, { revoke });
-    await new Promise((resolve) => {
-      chrome.identity.getAuthToken(
-        { interactive: false, account: { id: account.id } },
-        async (token) => {
-          const runtimeError = chrome.runtime.lastError;
-          if (runtimeError) {
-            resolve();
-            return;
-          }
-          if (token) {
-            gcxConsole.log(
-              "[GCX] 🗑️ Removing cached token for account:",
-              account.email || account.id
-            );
-            await removeCachedToken(token, { revoke });
-          }
-          resolve();
-        }
-      );
-    });
-  } catch (err) {
-    gcxConsole.debug("[GCX] invalidateAccountToken failed", err);
-  }
-}
-
-// 全アカウントのトークンを無効化（アカウント切り替え時）
-async function invalidateAllAccountTokens({ revoke = false } = {}) {
-  gcxConsole.log("[GCX] 🗑️ Invalidating all account tokens...");
-  const cachedTokens = [...tokenCache.values()].map((record) => record.token);
-  tokenCache.clear();
-  for (const key of sessionStateStore.keys()) {
-    resetSessionState(key);
-  }
-  for (const token of cachedTokens) {
-    await removeCachedToken(token, { revoke });
-  }
-  const accounts = await listIdentityAccounts();
-  for (const account of accounts) {
-    await invalidateAccountToken(account, { revoke });
-  }
-  gcxConsole.log("[GCX] ✓ All account tokens invalidated");
-}
-
-async function getAuthToken({
-  interactive = false,
-  accountHint,
-  sessionKey,
-} = {}) {
-  const normalizedSessionKey = ensureSessionKey(sessionKey);
-  const sessionState = ensureSessionState(normalizedSessionKey);
-
-  const incomingFingerprint = accountHint?.fingerprint || null;
-  if (
-    incomingFingerprint &&
-    sessionState.lastFingerprint &&
-    incomingFingerprint !== sessionState.lastFingerprint
-  ) {
-    gcxConsole.log("[GCX] 🔄 Account switch detected in background!");
-    gcxConsole.log("[GCX] Previous fingerprint:", sessionState.lastFingerprint);
-    gcxConsole.log("[GCX] New fingerprint:", incomingFingerprint);
-    await invalidateAllAccountTokens({ revoke: true });
-    await clearAllCachedTokens();
-    resetSessionState(normalizedSessionKey);
-    sessionState.lastFingerprint = incomingFingerprint;
-    gcxConsole.log("[GCX] ✓ Token invalidation completed");
-  }
-  if (incomingFingerprint) {
-    sessionState.lastFingerprint = incomingFingerprint;
-  }
-
-  let accountParam;
-  let resolvedAccount = null;
-
-  if (accountHint) {
-    const result = await resolveAccountFromHint(accountHint);
-    resolvedAccount = result.account;
-    if (resolvedAccount?.id) {
-      accountParam = { id: resolvedAccount.id };
-      gcxConsole.log(
-        "[GCX] 🎯 Using account for token:",
-        resolvedAccount.email || resolvedAccount.id
-      );
-      if (
-        sessionState.lastAccountId &&
-        sessionState.lastAccountId !== resolvedAccount.id
-      ) {
-        gcxConsole.log("[GCX] 🔄 Account ID changed, clearing old session tokens");
-        await forgetTokensForSession(normalizedSessionKey, { revoke: true });
-        resetSessionState(normalizedSessionKey);
-        if (incomingFingerprint) {
-          sessionState.lastFingerprint = incomingFingerprint;
-        }
-      }
-    } else {
-      gcxConsole.warn("[GCX] ⚠️ Could not resolve account, using default");
-      gcxConsole.warn("[GCX] 📋 Hint was:", JSON.stringify(accountHint, null, 2));
-    }
-  }
-
-  if (!interactive && !sessionState.hasActiveToken) {
-    gcxConsole.log(
-      "[GCX] No cached token for session. Switching to interactive flow."
-    );
-    interactive = true;
-  }
-
-  if (interactive && sessionState.authBlockReason) {
-    throw new Error(sessionState.authBlockReason);
-  }
-
-  const token = await new Promise((resolve, reject) => {
-    try {
-      const details = { interactive };
-      if (accountParam) {
-        details.account = accountParam;
-      }
-
-      chrome.identity.getAuthToken(details, (value) => {
-        if (chrome.runtime.lastError) {
-          const runtimeMessage = chrome.runtime.lastError.message || "";
-          if (isPermanentOAuthConfigError(runtimeMessage)) {
-            sessionState.authBlockReason = `OAuth configuration error: ${runtimeMessage}`;
-          }
-          gcxConsole.error(
-            "[GCX] getAuthToken error:",
-            runtimeMessage
-          );
-          reject(new Error(runtimeMessage));
-          return;
-        }
-        if (!value) {
-          gcxConsole.error("[GCX] No token returned");
-          reject(new Error("No token"));
-          return;
-        }
-        resolve(value);
+      sendResponse({
+        ok: true,
+        token: tokenRecord.token,
+        account: tokenRecord.account,
       });
-    } catch (err) {
-      reject(err);
-    }
-  });
-
-  const accountInfo = {
-    id: resolvedAccount?.id || null,
-    email: resolvedAccount?.email || null,
-    fingerprint: incomingFingerprint || null,
-    sessionKey: normalizedSessionKey,
-    scopeKey: OAUTH_SCOPE_HASH,
-    accountKey: accountHint?.accountKey || null,
-  };
-
-  if (accountInfo.id) {
-    sessionState.lastAccountId = accountInfo.id;
-  }
-  sessionState.hasActiveToken = true;
-  rememberToken(normalizedSessionKey, accountInfo.id, token);
-
-  if (interactive) {
-    gcxConsole.log("[GCX] ✓ Successfully obtained token via interactive auth");
-  } else {
-    gcxConsole.log(
-      "[GCX] Successfully obtained token for account:",
-      accountInfo.id || "default"
-    );
-  }
-
-  return { token, account: accountInfo };
-}
-
-function getAuthTokenSingleFlight(options = {}) {
-  const key = ensureSessionKey(options.sessionKey);
-  const existing = authInFlightStore.get(key);
-  if (existing) return existing;
-
-  const task = getAuthToken(options).finally(() => {
-    if (authInFlightStore.get(key) === task) {
-      authInFlightStore.delete(key);
+    } catch (error) {
+      gcxConsole.error("[GCX] GET_TOKEN error:", error);
+      sendResponse({
+        ok: false,
+        error: String((error && error.message) || error),
+      });
     }
   });
   authInFlightStore.set(key, task);
