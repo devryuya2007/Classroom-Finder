@@ -1,8 +1,11 @@
 import { rm, mkdir, cp } from "node:fs/promises";
 import { resolve } from "node:path";
+import { build } from "esbuild";
 
 const projectRoot = resolve(process.cwd());
 const distDir = resolve(projectRoot, "dist");
+const contentEntry = resolve(projectRoot, "src/content.js");
+const contentOutfile = resolve(distDir, "src/content.js");
 
 const targets = [
   { from: "manifest.json", to: "manifest.json" },
@@ -25,9 +28,22 @@ async function copyTargets() {
   }
 }
 
+async function bundleContentScript() {
+  await build({
+    entryPoints: [contentEntry],
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    target: "es2019",
+    outfile: contentOutfile,
+    minify: true,
+  });
+}
+
 async function main() {
   await cleanDist();
   await copyTargets();
+  await bundleContentScript();
   console.log("Build complete: dist/");
 }
 

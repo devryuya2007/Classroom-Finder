@@ -2,12 +2,12 @@
 
 import { gcxConsole } from "../../shared/utils.js";
 import {
-  renderHighlightedText,
   toArray,
   deriveDriveFileLabel,
   deriveAttachmentLabels,
   cssEscapeSafe,
 } from "../utils.js";
+import { renderHighlightedText } from "../search.js";
 import { AccountIdentityHelper, isPostForCurrentAccount } from "../account.js";
 import { ALLOWED_NAV_HOSTS } from "../constants.js";
 import { normalizeWhitespace } from "../utils.js";

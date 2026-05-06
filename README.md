@@ -43,9 +43,11 @@ Google Classroom（Web）に**高速・高精度の横断検索**を付与する
 ## インストール（開発者向け）
 
 1. このリポジトリをクローン
-2. Chrome → `chrome://extensions/` → 右上「デベロッパーモード」を ON
-3. 「パッケージ化されていない拡張機能を読み込む」→ 本リポジトリのルート（`manifest.json` がある階層）を選択
-4. Classroom（`https://classroom.google.com/`）を開く → 上部バー右側にクイック検索（試作UI）が表示
+2. プロジェクトルートで `npm install` を実行
+3. `npm run build` を実行して `dist/` を生成
+4. Chrome → `chrome://extensions/` → 右上「デベロッパーモード」を ON
+5. 「パッケージ化されていない拡張機能を読み込む」→ `dist/` を選択
+6. Classroom（`https://classroom.google.com/`）を開く → 上部バー右側にクイック検索（試作UI）が表示
 
 **必要権限（MV3）**
 

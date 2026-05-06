@@ -16,5 +16,8 @@
   },
   "dependencies": {
     "fuse.js": "^6.6.2"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.12"
   }
 }

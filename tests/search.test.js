@@ -1,6 +1,8 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import Fuse from '../src/libs/fuse.esm.js';
+import nodeTest from "node:test";
+import assert from "node:assert/strict";
+import Fuse from "../src/libs/fuse.esm.js";
+
+const test = globalThis.test ?? nodeTest;
 
 // content.js と同じ Fuse 設定をここでも再現
 const fuseOptions = {

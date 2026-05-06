@@ -1,7 +1,7 @@
 // Fuse.js search integration
 
 import { gcxConsole } from "../shared/utils.js";
-import { normalizeWhitespace, toArray } from "./utils.js";
+import { getExtensionURL, normalizeWhitespace, toArray } from "./utils.js";
 import { SUGGESTION_LIMIT } from "./constants.js";
 
 export const SEARCH_OPTIONS = {
@@ -136,7 +136,6 @@ export function renderHighlightedText(element, value, matches, key) {
 export async function injectLib(name) {
   if (name !== "fuse") return false;
   if (window.Fuse) return true;
-  const { getExtensionURL } = require("./utils.js");
   const url = getExtensionURL("src/libs/fuse.esm.js");
   try {
     const module = await import(url);
