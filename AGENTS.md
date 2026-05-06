@@ -126,11 +126,14 @@ type Att = 'docs'|'sheets'|'slides'|'pdf'|'link'|'other';
 
 ## 11. Conventions
 
-- Commits: **Conventional Commits** (`feat:`, `fix:`, `perf:`, `docs:` …)
+- Commits: **Conventional Commits** (`feat:`, `fix:`, `perf:`, `docs:` …) with **Japanese messages**
+  - Format: `<type>(<scope>): <日本語の説明>`
+  - Example: `refactor(modules): 責務分離のため共有ユーティリティを抽出`
+  - Multi-line: first line (type + JP), blank line, then bullet-point details in Japanese
 - Branches: `feature/<area>-<short>`
 - Code style: **ESLint + Prettier (strict)**; no commented-out code in `src/`.
 - Language: **JavaScript (ES Modules)**. 型は **JSDoc typedef** で表現。
-<!-- 規約: コミットは Conventional、ブランチ命名を統一。ESLint/Prettier 厳格。src 内にコメントアウトコードを残さない。言語は JS（ESM）、型は JSDoc。 -->
+<!-- 規約: コミットは Conventional で日本語メッセージを使用。ブランチ命名を統一。ESLint/Prettier 厳格。src 内にコメントアウトコードを残さない。言語は JS（ESM）、型は JSDoc。 -->
 
 ## 12. Risks (watchlist)
 
