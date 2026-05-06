@@ -3,7 +3,6 @@
 import { gcxConsole } from "../shared/utils.js";
 import { normalizeWhitespace, toArray } from "./utils.js";
 import {
-  ensureIdentityAccounts,
   getAccountHint,
   AccountIdentityHelper,
   getClassroomGaiaId,

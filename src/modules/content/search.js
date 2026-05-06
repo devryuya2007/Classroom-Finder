@@ -1,7 +1,8 @@
 // Fuse.js search integration
 
 import { gcxConsole } from "../shared/utils.js";
-import { getExtensionURL, normalizeWhitespace, toArray } from "./utils.js";
+import Fuse from "../../libs/fuse.esm.js";
+import { normalizeWhitespace, toArray } from "./utils.js";
 import { SUGGESTION_LIMIT } from "./constants.js";
 
 export const SEARCH_OPTIONS = {
@@ -23,7 +24,11 @@ export let fuseInstance = null;
 
 export async function initFuse(posts) {
   try {
-    fuseInstance = new window.Fuse(posts, SEARCH_OPTIONS);
+    const FuseConstructor = Fuse || window.Fuse;
+    if (typeof FuseConstructor !== "function") {
+      throw new Error("Fuse constructor is not available");
+    }
+    fuseInstance = new FuseConstructor(posts, SEARCH_OPTIONS);
   } catch (error) {
     gcxConsole.error("[GCX] Failed to init fuse", error);
     fuseInstance = null;
@@ -133,41 +138,9 @@ export function renderHighlightedText(element, value, matches, key) {
   element.appendChild(fragment);
 }
 
-export async function injectLib(name) {
-  if (name !== "fuse") return false;
-  if (window.Fuse) return true;
-  const url = getExtensionURL("src/libs/fuse.esm.js");
-  try {
-    const module = await import(url);
-    const FuseExport = module?.default || module?.Fuse || module;
-    if (typeof FuseExport !== "function") {
-      throw new Error("Fuse module did not export a constructor");
-    }
-    window.Fuse = FuseExport;
-    const detail = {
-      name,
-      success: true,
-      message: "",
-      source: url,
-    };
-    window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
-    return true;
-  } catch (err) {
-    const detail = {
-      name,
-      success: false,
-      message: String(err || ""),
-      source: url,
-    };
-    window.dispatchEvent(new CustomEvent("gcx:libs-loaded", { detail }));
-    return false;
-  }
-}
-
 export async function loadLocalLibs() {
-  try {
-    return await injectLib("fuse");
-  } catch {
-    return false;
-  }
+  if (window.Fuse) return true;
+  if (typeof Fuse !== "function") return false;
+  window.Fuse = Fuse;
+  return true;
 }

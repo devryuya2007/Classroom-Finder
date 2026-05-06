@@ -36,7 +36,7 @@ async function bundleContentScript() {
     platform: "browser",
     target: "es2019",
     outfile: contentOutfile,
-    minify: true,
+    minify: false,
   });
 }
 

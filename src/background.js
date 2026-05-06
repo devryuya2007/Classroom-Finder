@@ -10,6 +10,7 @@ import {
   invalidateAllAccountTokens,
   invalidateAccountToken,
 } from "./modules/background/auth.js";
+import { deriveSessionKey } from "./modules/background/utils.js";
 import { clearAllCachedTokens } from "./modules/background/token-manager.js";
 import { listIdentityAccountsWithProfiles } from "./modules/background/account.js";
 import { googleFetch } from "./modules/background/api-proxy.js";
@@ -55,7 +56,7 @@ const messageHandlers = {
   async GCX_GOOGLE_GET_TOKEN(msg, sender, sendResponse) {
     gcxConsole.log("[GCX] 🔐 GET_TOKEN request, interactive:", !!msg.interactive);
     try {
-      const sessionKey = require("./modules/background/utils.js").deriveSessionKey(sender, msg.accountHint);
+      const sessionKey = deriveSessionKey(sender, msg.accountHint);
       const tokenRecord = await getAuthTokenSingleFlight(
         authInFlightStore,
         tokenCache,
@@ -103,7 +104,7 @@ const messageHandlers = {
   async GCX_GOOGLE_FETCH(msg, sender, sendResponse) {
     try {
       gcxConsole.log("[GCX] 📥 Processing GOOGLE_FETCH request");
-      const sessionKey = require("./modules/background/utils.js").deriveSessionKey(sender, msg.accountHint);
+      const sessionKey = deriveSessionKey(sender, msg.accountHint);
 
       // Create a bound getAuthTokenSingleFlight for this fetch
       const boundGetAuthToken = (options) =>

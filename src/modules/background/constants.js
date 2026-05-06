@@ -1,5 +1,7 @@
 // Background service worker constants
 
+import { createSimpleHash } from "../shared/utils.js";
+
 export const CLASSROOM_BASE = "https://classroom.googleapis.com/v1";
 
 // Restrict proxy fetches to Classroom API only (must match manifest host_permissions)
@@ -19,6 +21,5 @@ export const getOAuthConfig = () => {
 
 export const OAUTH_SCOPE_HASH_FACTORY = (scopes) => {
   const sorted = [...scopes].sort();
-  const { createSimpleHash } = require("../shared/utils.js");
   return createSimpleHash(sorted.join(" ") || "default-scope");
 };

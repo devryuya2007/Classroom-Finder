@@ -2,7 +2,12 @@
 
 import { gcxConsole, createSimpleHash, normalizeEmail } from "../shared/utils.js";
 import { ensureSessionState, resetSessionState } from "./session.js";
-import { rememberToken, removeCachedToken } from "./token-manager.js";
+import {
+  rememberToken,
+  removeCachedToken,
+  invalidateTokensForAccountId,
+  clearAllCachedTokens,
+} from "./token-manager.js";
 import { listIdentityAccounts } from "./account.js";
 import { isPermanentOAuthConfigError } from "./utils.js";
 
@@ -241,7 +246,6 @@ export function getAuthTokenSingleFlight(
 export async function invalidateAccountToken(tokenCache, sessionStateStore, oauthScopeHash, account, { revoke = false } = {}) {
   if (!account?.id) return;
   try {
-    const { invalidateTokensForAccountId } = require("./token-manager.js");
     await invalidateTokensForAccountId(tokenCache, sessionStateStore, oauthScopeHash, account.id, { revoke });
     await new Promise((resolve) => {
       chrome.identity.getAuthToken(
@@ -275,7 +279,6 @@ export async function invalidateAllAccountTokens(tokenCache, sessionStateStore, 
   for (const key of sessionStateStore.keys()) {
     resetSessionState(sessionStateStore, key);
   }
-  const { clearAllCachedTokens } = require("./token-manager.js");
   await clearAllCachedTokens(tokenCache, sessionStateStore);
   const accounts = await listIdentityAccounts();
   for (const account of accounts) {

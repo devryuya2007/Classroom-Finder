@@ -1,8 +1,8 @@
 // API proxy for Google Classroom
 
-import { gcxConsole } from "../shared/utils.js";
+import { gcxConsole, normalizeEmail } from "../shared/utils.js";
 import { buildUrl, assertAllowedTarget } from "./utils.js";
-import { rememberToken } from "./token-manager.js";
+import { rememberToken, removeCachedToken } from "./token-manager.js";
 
 export async function googleFetch(
   classroomBase,
@@ -47,7 +47,6 @@ export async function googleFetch(
         String(accountHint.fingerprint).slice(0, 64);
     }
     if (accountHint?.email) {
-      const { normalizeEmail } = require("../shared/utils.js");
       computedHeaders["X-GCX-Account-Email"] = String(
         normalizeEmail(accountHint.email) || accountHint.email
       );
@@ -75,7 +74,6 @@ export async function googleFetch(
 
     if (res.status === 401 || res.status === 403) {
       gcxConsole.warn("[GCX] Got 401/403, removing token and retrying");
-      const { removeCachedToken } = require("./token-manager.js");
       await removeCachedToken(tokenCache, {}, oauthScopeHash, tokenRecord.token, { revoke: true });
       if (interactiveOnRetry) {
         tokenRecord = await getAuthTokenSingleFlightFn({
