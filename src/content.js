@@ -23,7 +23,7 @@ import { bgFetch, fetchAllAnnouncementsPosts } from "./modules/content/api.js";
 import { syncStreamPosts, resetSearchResults } from "./modules/content/sync.js";
 
 // Constants & utils
-import { API_MODE, POLL_INTERVAL_MS, PLACEHOLDER_DEFAULT, PLACEHOLDER_ACCOUNT_MISMATCH, AUTH_INIT_STATE_KEY, STREAM_SELECTOR_PRIMARY, STREAM_SELECTOR_FALLBACK, STREAM_ID_SELECTOR } from "./modules/content/constants.js";
+import { API_MODE, POLL_INTERVAL_MS, PLACEHOLDER_DEFAULT, PLACEHOLDER_ACCOUNT_MISMATCH, PLACEHOLDER_ACCOUNT_SWITCH_SUCCESS, PLACEHOLDER_RELOAD_REQUIRED, PLACEHOLDER_LOGIN_REQUIRED, AUTH_INIT_STATE_KEY, ACCOUNT_SWITCH_STATE_KEY, STREAM_SELECTOR_PRIMARY, STREAM_SELECTOR_FALLBACK, STREAM_ID_SELECTOR } from "./modules/content/constants.js";
 import { normalizeWhitespace, formatPostedAtForJapan, normalizeAttachments, toArray } from "./modules/content/utils.js";
 
 // Global state
@@ -33,8 +33,10 @@ let lastAccountKey = null;
 let lastQuery = "";
 let topbarObserver = null;
 let topbarCheckInterval = null;
+let accountSwitchCheckInterval = null;
+const accountSwitchReloadedKeys = new Set();
+let accountSwitchSuccessMessageActive = false;
 let accountInitialized = false;
-let lastPathname = window.location.pathname;
 
 // Setup storage listener for channel token
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -120,29 +122,16 @@ function setupTopbarCheckInterval() {
 }
 
 function setupAccountSwitchDetection() {
+  if (accountSwitchCheckInterval) return;
+
   const checkAccountSwitch = () => {
-    const currentPathname = window.location.pathname;
-    if (currentPathname !== lastPathname) {
-      const oldMatch = lastPathname.match(/\/u\/(\d+)/);
-      const newMatch = currentPathname.match(/\/u\/(\d+)/);
-      const oldIndex = oldMatch ? oldMatch[1] : "0";
-      const newIndex = newMatch ? newMatch[1] : "0";
-
-      if (oldIndex !== newIndex) {
-        gcxConsole.log("[GCX] 🔄 URL changed, account switch detected!");
-        lastPathname = currentPathname;
-
-        void syncStreamPosts({ source: "account-switch" }, syncDependencies).catch((err) => {
-          gcxConsole.error("[GCX] Account switch sync failed:", err);
-        });
-      } else {
-        lastPathname = currentPathname;
-      }
-    }
+    void detectAccountSwitch("interval");
   };
 
-  setInterval(checkAccountSwitch, 1000);
-  window.addEventListener("popstate", checkAccountSwitch);
+  accountSwitchCheckInterval = setInterval(checkAccountSwitch, 1500);
+  window.addEventListener("focus", () => {
+    void detectAccountSwitch("focus");
+  });
 }
 
 async function readAuthInitState() {
@@ -190,6 +179,145 @@ async function markAuthInitialized(accountKey) {
   if (state[accountKey]) return;
   state[accountKey] = Date.now();
   await writeAuthInitState(state);
+}
+
+async function readAccountSwitchState() {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([ACCOUNT_SWITCH_STATE_KEY], (items) => {
+        if (chrome.runtime.lastError) {
+          resolve({});
+          return;
+        }
+        const raw = items?.[ACCOUNT_SWITCH_STATE_KEY];
+        if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          resolve({ ...raw });
+        } else {
+          resolve({});
+        }
+      });
+    } catch (err) {
+      resolve({});
+    }
+  });
+}
+
+async function writeAccountSwitchState(state) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.set({ [ACCOUNT_SWITCH_STATE_KEY]: state }, () => {
+        resolve();
+      });
+    } catch (err) {
+      resolve();
+    }
+  });
+}
+
+function getAccountSnapshot() {
+  const fingerprint = AccountIdentityHelper.getFingerprint();
+  const accountKey = AccountIdentityHelper.getCompositeKey();
+  const gaiaId = getClassroomGaiaId();
+  const email = getClassroomAccountEmail();
+  return {
+    fingerprint,
+    accountKey,
+    gaiaId,
+    email,
+    hasSignal: Boolean(gaiaId || email),
+  };
+}
+
+function applyAccountSwitchSuccessPlaceholder() {
+  if (accountSwitchSuccessMessageActive) {
+    setTopbarPlaceholder(PLACEHOLDER_ACCOUNT_SWITCH_SUCCESS);
+  }
+}
+
+async function handleAccountSwitchReload(previousState, currentSnapshot) {
+  if (!currentSnapshot.hasSignal) {
+    return false;
+  }
+
+  const previousFingerprint = previousState?.fingerprint || null;
+  const previousAccountKey = previousState?.accountKey || null;
+
+  if (!previousFingerprint && !previousAccountKey) {
+    return false;
+  }
+
+  const switched =
+    (previousFingerprint && previousFingerprint !== currentSnapshot.fingerprint) ||
+    (previousAccountKey && previousAccountKey !== currentSnapshot.accountKey);
+
+  if (!switched) {
+    return false;
+  }
+
+  const attemptKey = `${previousFingerprint || "none"}->${currentSnapshot.fingerprint || "none"}`;
+  if (accountSwitchReloadedKeys.has(attemptKey)) {
+    return false;
+  }
+  accountSwitchReloadedKeys.add(attemptKey);
+
+  accountSwitchSuccessMessageActive = false;
+  setTopbarPlaceholder("アカウント切り替えを検知しました...");
+
+  try {
+    await syncStreamPosts(
+      {
+        source: "account-switch",
+        lastAccountFingerprint: previousFingerprint,
+        lastAccountKey: previousAccountKey,
+        identityAccounts,
+        keepPlaceholder: true,
+      },
+      syncDependencies
+    );
+    accountSwitchSuccessMessageActive = true;
+    setTopbarPlaceholder(PLACEHOLDER_ACCOUNT_SWITCH_SUCCESS);
+  } catch (err) {
+    accountSwitchSuccessMessageActive = false;
+    setTopbarPlaceholder(resolveRefreshErrorPlaceholder(err));
+  } finally {
+    lastAccountFingerprint = currentSnapshot.fingerprint;
+    lastAccountKey = currentSnapshot.accountKey;
+    await writeAccountSwitchState({
+      fingerprint: currentSnapshot.fingerprint,
+      accountKey: currentSnapshot.accountKey,
+      updatedAt: Date.now(),
+    });
+  }
+
+  return true;
+}
+
+async function detectAccountSwitch(reason) {
+  const currentSnapshot = getAccountSnapshot();
+  const previousState = {
+    fingerprint: lastAccountFingerprint,
+    accountKey: lastAccountKey,
+  };
+
+  const switched = await handleAccountSwitchReload(previousState, currentSnapshot);
+  if (!switched && currentSnapshot.hasSignal) {
+    if (
+      currentSnapshot.fingerprint !== lastAccountFingerprint ||
+      currentSnapshot.accountKey !== lastAccountKey
+    ) {
+      lastAccountFingerprint = currentSnapshot.fingerprint;
+      lastAccountKey = currentSnapshot.accountKey;
+    }
+    await writeAccountSwitchState({
+      fingerprint: currentSnapshot.fingerprint,
+      accountKey: currentSnapshot.accountKey,
+      updatedAt: Date.now(),
+    });
+  }
+
+  if (reason === "initial") {
+    applyAccountSwitchSuccessPlaceholder();
+  }
 }
 
 async function ensureIdentityAccounts() {
@@ -263,7 +391,8 @@ const uiHandlers = {
     }
 
     setTopbarPlaceholder("データを取得中...");
-    await syncStreamPosts({ source: "manual" }, syncDependencies);
+    await syncStreamPosts(buildSyncOptions({ source: "manual" }), syncDependencies);
+    applyAccountSwitchSuccessPlaceholder();
     setTopbarPlaceholder("");
   },
   flashRefreshError: (err) => {
@@ -308,22 +437,41 @@ const syncDependencies = {
   isAccountMismatchError,
   rerunLastQuery: () =>
     rerunLastQuery(lastQuery, collectTopMatches, (results) => renderSuggestions(results, uiHandlers), uiHandlers),
-  lastAccountFingerprint,
-  lastAccountKey,
-  identityAccounts,
 };
+
+function buildSyncOptions(extra = {}) {
+  return {
+    lastAccountFingerprint,
+    lastAccountKey,
+    identityAccounts,
+    ...extra,
+  };
+}
 
 async function observe() {
   ensureTopbar(uiHandlers);
   setupTopbarObserver();
   setupTopbarCheckInterval();
-  setupAccountSwitchDetection();
 
   try {
     await ensureIdentityAccounts();
-    const initialFingerprint = AccountIdentityHelper.getFingerprint();
-    lastAccountFingerprint = initialFingerprint;
-    lastAccountKey = AccountIdentityHelper.getCompositeKey();
+    const storedSwitchState = await readAccountSwitchState();
+    const snapshot = getAccountSnapshot();
+    if (storedSwitchState.fingerprint || storedSwitchState.accountKey) {
+      lastAccountFingerprint = storedSwitchState.fingerprint || null;
+      lastAccountKey = storedSwitchState.accountKey || null;
+      await handleAccountSwitchReload(storedSwitchState, snapshot);
+    } else {
+      lastAccountFingerprint = snapshot.fingerprint;
+      lastAccountKey = snapshot.accountKey;
+      await writeAccountSwitchState({
+        fingerprint: snapshot.fingerprint,
+        accountKey: snapshot.accountKey,
+        updatedAt: Date.now(),
+      });
+    }
+
+    const initialFingerprint = snapshot.fingerprint;
     accountInitialized = true;
     gcxConsole.log("[GCX] Account initialized:", {
       fingerprint: initialFingerprint,
@@ -359,7 +507,13 @@ async function observe() {
     gcxConsole.warn("[GCX] Failed to initialize account info", err);
   }
 
-  void syncStreamPosts({}, syncDependencies).catch((err) => {
+  setupAccountSwitchDetection();
+
+  void syncStreamPosts(buildSyncOptions(), syncDependencies)
+    .then(() => {
+      applyAccountSwitchSuccessPlaceholder();
+    })
+    .catch((err) => {
     if (
       err &&
       err.message &&
@@ -382,7 +536,11 @@ async function observe() {
     setInterval(() => {
       checkTopbarPresence();
 
-      void syncStreamPosts({}, syncDependencies).catch((err) => {
+      void syncStreamPosts(buildSyncOptions(), syncDependencies)
+        .then(() => {
+          applyAccountSwitchSuccessPlaceholder();
+        })
+        .catch((err) => {
         if (
           err &&
           err.message &&
@@ -413,7 +571,8 @@ async function init() {
   await loadLocalLibs();
   if (API_MODE) {
     try {
-      await syncStreamPosts({}, syncDependencies);
+      await syncStreamPosts(buildSyncOptions(), syncDependencies);
+      applyAccountSwitchSuccessPlaceholder();
     } catch (error) {
       gcxConsole.warn("[GCX] Initial fetch failed", error);
       uiHandlers.flashRefreshError(error);
