@@ -27,21 +27,6 @@ export async function resolveAccountFromHint(accountHint) {
   if (accountHint && typeof accountHint === "object") {
     const { gaiaId, email, index } = accountHint;
 
-    // Search by GAIA ID
-    if (gaiaId) {
-      gcxConsole.log("[GCX] 🔎 Searching by gaiaId:", gaiaId);
-      const matchById = accounts.find((acc) => acc?.id === gaiaId);
-      if (matchById) {
-        gcxConsole.log("[GCX] ✓ Found account by gaiaId:", matchById.email);
-        return { account: matchById, accounts };
-      } else {
-        gcxConsole.warn("[GCX] ⚠️ No match found for gaiaId:", gaiaId);
-      }
-    } else {
-      gcxConsole.log("[GCX] ℹ️ No gaiaId provided in hint");
-    }
-
-    // Search by email
     const normalizedEmail = normalizeEmail(email);
     if (normalizedEmail) {
       gcxConsole.log("[GCX] 🔎 Searching by email:", normalizedEmail);
@@ -56,6 +41,20 @@ export async function resolveAccountFromHint(accountHint) {
       }
     } else {
       gcxConsole.log("[GCX] ℹ️ No email provided in hint");
+    }
+
+    // Search by GAIA ID
+    if (gaiaId) {
+      gcxConsole.log("[GCX] 🔎 Searching by gaiaId:", gaiaId);
+      const matchById = accounts.find((acc) => acc?.id === gaiaId);
+      if (matchById) {
+        gcxConsole.log("[GCX] ✓ Found account by gaiaId:", matchById.email);
+        return { account: matchById, accounts };
+      } else {
+        gcxConsole.warn("[GCX] ⚠️ No match found for gaiaId:", gaiaId);
+      }
+    } else {
+      gcxConsole.log("[GCX] ℹ️ No gaiaId provided in hint");
     }
 
     // Search by index

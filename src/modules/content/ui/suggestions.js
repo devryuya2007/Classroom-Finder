@@ -211,7 +211,7 @@ export async function handleSuggestionActivation(item, handlers) {
         path: `/courses/${encodeURIComponent(
           courseId
         )}/announcements/${encodeURIComponent(apiId)}`,
-      });
+      }, handlers.getAccountHint?.());
       const fetchedLink = normalizeWhitespace(data?.alternateLink || "");
       if (navigateTo(fetchedLink)) {
         return;
@@ -237,10 +237,6 @@ export function rerunLastQuery(lastQuery, collectTopMatches, renderSuggestions, 
   if (lastQuery) {
     renderSuggestions(collectTopMatches(lastQuery), handlers);
   } else {
-    const SUGGESTION_LIMIT = 20;
-    const limited = getCurrentSearchDocs()
-      .slice(0, SUGGESTION_LIMIT)
-      .map((item) => ({ item }));
-    renderSuggestions(limited, handlers);
+    renderSuggestions([], handlers);
   }
 }
