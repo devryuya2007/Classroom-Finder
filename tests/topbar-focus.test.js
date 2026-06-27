@@ -180,3 +180,30 @@ test("トップバー生成時に検索欄へ自動フォーカスしない", ()
     globalThis.document = previousDocument;
   }
 });
+
+test("リロードボタンには設定用の円形メニュー入口が付く", () => {
+  const previousDocument = globalThis.document;
+  const fakeDocument = createFakeDocument();
+  globalThis.document = fakeDocument;
+
+  try {
+    const topbar = createTopbar({});
+    fakeDocument.body.appendChild(topbar);
+
+    const actionWrap = topbar.querySelector(".gcx-refresh-action-wrap");
+    const refreshButton = topbar.querySelector(".gcx-refresh-btn");
+    const radialMenu = topbar.querySelector(".gcx-radial-menu");
+    const settingsButton = topbar.querySelector(".gcx-radial-settings");
+    const settingsPanel = topbar.querySelector(".gcx-settings-panel");
+
+    assert.ok(actionWrap, "リロード操作用のラッパーが生成されること");
+    assert.ok(refreshButton, "既存のリロードボタンが残ること");
+    assert.ok(radialMenu, "円形メニューが生成されること");
+    assert.ok(settingsButton, "設定ボタンが生成されること");
+    assert.ok(settingsPanel, "設定パネルが生成されること");
+    assert.equal(settingsButton.getAttribute("aria-label"), "設定を開く");
+    assert.equal(radialMenu.getAttribute("aria-hidden"), "true");
+  } finally {
+    globalThis.document = previousDocument;
+  }
+});
