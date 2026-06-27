@@ -266,7 +266,7 @@ function createRefreshActionMenu(refreshBtn) {
 
   for (let i = 0; i < 2; i += 1) {
     const emptySlot = document.createElement("span");
-    emptySlot.classList.add("gcx-radial-empty-slot");
+    emptySlot.classList.add("gcx-radial-empty-slot", `gcx-radial-slot-${i + 1}`);
     emptySlot.setAttribute("aria-hidden", "true");
     radialSurface.appendChild(emptySlot);
   }
@@ -300,8 +300,8 @@ function createRefreshActionMenu(refreshBtn) {
     });
     animateMotion(settingsButton, settingsMotion, {
       opacity: 1,
-      x: 0,
-      y: 0,
+      x: 10,
+      y: -34,
       scale: 1,
       duration: 0.32,
       ease: "back.out(1.7)",
